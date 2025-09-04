@@ -10,35 +10,78 @@ from src.database.database import db_manager
 
 
 class ReminderService:
-    """CRUD operations for reminders."""
+    """CRUD operations for reminders.
 
-    TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+    Notes on time handling:
+    - We interpret input/output times as Ethiopia local time (GMT+3).
+    - We accept both 24-hour (HH:MM) and 12-hour (h:MM AM/PM) inputs.
+    - We store as 24-hour HH:MM:SS string in the database.
+    """
+
+    TIME_24H_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+    TIME_12H_RE = re.compile(r"^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$")
 
     def parse_time(self, time_str: str) -> Optional[time]:
-        m = self.TIME_RE.match(time_str.strip())
-        if not m:
-            return None
-        hh = int(m.group(1))
-        mm = int(m.group(2))
-        if not (0 <= hh <= 23 and 0 <= mm <= 59):
-            return None
-        return time(hour=hh, minute=mm)
+        s = time_str.strip()
+        m12 = self.TIME_12H_RE.match(s)
+        if m12:
+            hh = int(m12.group(1))
+            mm = int(m12.group(2))
+            ampm = m12.group(3).lower()
+            if not (1 <= hh <= 12 and 0 <= mm <= 59):
+                return None
+            if ampm == 'pm' and hh != 12:
+                hh += 12
+            if ampm == 'am' and hh == 12:
+                hh = 0
+            return time(hour=hh, minute=mm)
+        m24 = self.TIME_24H_RE.match(s)
+        if m24:
+            hh = int(m24.group(1))
+            mm = int(m24.group(2))
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                return None
+            return time(hour=hh, minute=mm)
+        return None
+
+    def format_time_12h(self, t: time) -> str:
+        hh = t.hour
+        mm = t.minute
+        ampm = 'AM'
+        if hh == 0:
+            out_h = 12
+            ampm = 'AM'
+        elif 1 <= hh < 12:
+            out_h = hh
+            ampm = 'AM'
+        elif hh == 12:
+            out_h = 12
+            ampm = 'PM'
+        else:
+            out_h = hh - 12
+            ampm = 'PM'
+        return f"{out_h}:{mm:02d} {ampm}"
 
     def set_reminder(self, user_id: int, t: time, frequency: str = "daily") -> None:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
-            # upsert by user
+            # update-then-insert to avoid ON CONFLICT requirement
             cur.execute(
                 """
-                INSERT INTO reminders (user_id, reminder_time, frequency, is_active, created_at)
-                VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    reminder_time = excluded.reminder_time,
-                    frequency = excluded.frequency,
-                    is_active = 1
+                UPDATE reminders
+                SET reminder_time = ?, frequency = ?, is_active = 1
+                WHERE user_id = ?
                 """,
-                (user_id, t.strftime("%H:%M:00"), frequency),
+                (t.strftime("%H:%M:00"), frequency, user_id),
             )
+            if cur.rowcount == 0:
+                cur.execute(
+                    """
+                    INSERT INTO reminders (user_id, reminder_time, frequency, is_active, created_at)
+                    VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                    """,
+                    (user_id, t.strftime("%H:%M:00"), frequency),
+                )
             conn.commit()
 
     def get_reminder(self, user_id: int) -> Optional[Dict]:
