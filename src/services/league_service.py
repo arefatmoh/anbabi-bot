@@ -269,3 +269,24 @@ class LeagueService:
         except Exception as e:
             self.logger.error(f"Failed to update league status: {e}")
             return False, f"Failed to update league status: {str(e)}"
+    
+    def get_all_leagues(self) -> List[Dict]:
+        """Get all leagues with member counts."""
+        try:
+            leagues = self.league_repo.get_all_leagues()
+            result = []
+            for league in leagues:
+                member_count = self.league_repo.get_league_member_count(league.league_id)
+                league_dict = {
+                    'league_id': league.league_id,
+                    'name': league.name,
+                    'status': league.status,
+                    'member_count': member_count,
+                    'max_members': league.max_members,
+                    'duration_days': league.duration_days,
+                }
+                result.append(league_dict)
+            return result
+        except Exception as e:
+            self.logger.error(f"Error getting all leagues: {e}")
+            return []

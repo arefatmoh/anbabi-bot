@@ -6,9 +6,10 @@ This module contains the main bot class that orchestrates all functionality.
 
 import logging
 import re
-from datetime import time
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.constants import ParseMode
+from telegram.ext import Defaults
 
 from src.config.settings import BOT_TOKEN
 from src.core.handlers.user_handlers import UserHandlers
@@ -17,6 +18,7 @@ from src.core.handlers.admin_league_handlers import AdminLeagueHandlers
 from src.core.handlers.conversation import ConversationHandlers
 from src.services.book_service import BookService
 from src.services.reminder_service import ReminderService
+from src.services.factory import get_league_service
 
 
 class ReadingTrackerBot:
@@ -38,16 +40,44 @@ class ReadingTrackerBot:
         try:
             self.user_handlers = UserHandlers()
             self.admin_handlers = AdminHandlers()
-            self.admin_league_handlers = AdminLeagueHandlers(self.user_handlers.league_handlers.league_service)
+            self.admin_league_handlers = AdminLeagueHandlers(get_league_service())
             self.conversation_handlers = ConversationHandlers()
             self.logger.info("✅ All handlers initialized successfully")
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize handlers: {e}")
             raise
     
+    async def _handle_create_league_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle create_league command."""
+        from src.core.handlers.admin_league_handlers import AdminLeagueHandlers
+        from src.services.factory import get_league_service
+        
+        league_service = get_league_service()
+        league_handlers = AdminLeagueHandlers(league_service)
+        
+        # Set conversation state
+        context.user_data['creating_league'] = True
+        context.user_data['league_data'] = {}
+        
+        await league_handlers.handle_create_league(update, context)
+    
+    async def _handle_add_book_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle add_book command."""
+        from src.core.handlers.admin_handlers import AdminHandlers
+        
+        admin_handlers = AdminHandlers()
+        
+        # Set conversation state
+        context.user_data['adding_book'] = True
+        context.user_data['book_data'] = {}
+        context.user_data['book_step'] = 'title'
+        
+        await admin_handlers.handle_book_addition(update, context)
+    
     def _init_application(self):
         try:
-            self.application = Application.builder().token(BOT_TOKEN).build()
+            defaults = Defaults(parse_mode=ParseMode.HTML)
+            self.application = Application.builder().token(BOT_TOKEN).defaults(defaults).build()
             self.logger.info("✅ Telegram application initialized successfully")
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize application: {e}")
@@ -57,6 +87,9 @@ class ReadingTrackerBot:
         try:
             # /start and registration first
             self.application.add_handler(CommandHandler('start', self.user_handlers.start))
+            
+            # Progress numeric input - MUST come before general text handler
+            self.application.add_handler(MessageHandler(filters.Regex(re.compile(r"^\d+$")), self._handle_progress_number))
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.user_handlers.handle_registration_text))
 
             # User commands
@@ -71,16 +104,46 @@ class ReadingTrackerBot:
             self.application.add_handler(CommandHandler('reminder_view', self.user_handlers.reminder_view))
             self.application.add_handler(CommandHandler('reminder_remove', self.user_handlers.reminder_remove))
             self.application.add_handler(CommandHandler('profile', self.user_handlers.profile_command))
+            
+            # Admin commands
+            self.application.add_handler(CommandHandler('admin', self.admin_handlers.admin_command))
+            self.application.add_handler(CommandHandler('create_league', self._handle_create_league_command))
+            self.application.add_handler(CommandHandler('add_book', self._handle_add_book_command))
+            
+            # Admin message handlers
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.admin_handlers.handle_book_addition))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.admin_handlers.handle_user_search))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.admin_handlers.handle_user_ban))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.admin_handlers.handle_user_unban))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.admin_handlers.handle_user_message))
 
             # Mode selection and submenus
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_mode_callback, pattern="^mode_(individual|community)$"))
-            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^ind_(books|add_book|progress|stats|reminder|set_goal)$"))
-            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_action, pattern="^com_(browse|my|leaderboard)$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^ind_(my_books|add_book|progress|stats|reminder|set_goal)$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_action, pattern="^com_(browse|my|progress|leaderboard|reminder|stats)$"))
 
             # Goal inline callbacks
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_goal_inline, pattern=r"^goal_(\d+|custom)$"))
             # Reminder inline callbacks
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_reminder_inline, pattern=r"^rem_(menu|time_\d{4}|disable|custom)$"))
+
+            # My Books pagination, open and delete callbacks
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_my_books_page, pattern=r"^ind_my_books_page_\d+$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_my_book_open, pattern=r"^ind_book_\d+$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_delete_book_inline, pattern=r"^ind_del_\d+$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_delete_book_inline, pattern=r"^ind_del_confirm_\d+$"))
+            
+            # Admin callbacks
+            self.application.add_handler(CallbackQueryHandler(self.admin_handlers.handle_admin_callback, pattern=r"^admin_.*$"))
+            
+            # League book selection callbacks
+            self.application.add_handler(CallbackQueryHandler(self.admin_league_handlers.handle_league_book_selection, pattern=r"^league_book_\d+$"))
+            self.application.add_handler(CallbackQueryHandler(self.admin_league_handlers.handle_league_book_selection, pattern="^league_cancel$"))
+            self.application.add_handler(CallbackQueryHandler(self.admin_league_handlers.handle_league_book_selection, pattern=r"^league_books_page_\d+$"))
+            
+            # League confirmation callbacks
+            self.application.add_handler(CallbackQueryHandler(self.admin_league_handlers.handle_league_confirmation, pattern="^league_confirm$"))
+            self.application.add_handler(CallbackQueryHandler(self.admin_league_handlers.handle_league_confirmation, pattern="^league_cancel_confirm$"))
 
             # Admin: league creation + edits
             self.application.add_handler(CommandHandler('setbook', self.admin_league_handlers.handle_create_league))
@@ -107,15 +170,16 @@ class ReadingTrackerBot:
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_leave, pattern="^league_leave_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_leave_confirm, pattern="^league_leave_confirm_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_leaderboard_view, pattern="^league_lb_\\d+$"))
+            self.application.add_handler(CallbackQueryHandler(lh.handle_league_stats_callback, pattern="^league_stats$"))
+            self.application.add_handler(CallbackQueryHandler(lh.handle_league_leaderboard_callback, pattern="^league_leaderboard$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_menu, pattern="^main_menu$"))
 
             # Book callbacks
             self.application.add_handler(CallbackQueryHandler(self._handle_book_start, pattern="^book_start_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(self._handle_progress_select_book, pattern="^progress_select_\\d+$"))
-            self.application.add_handler(CallbackQueryHandler(self._handle_progress_quick_add, pattern="^progress_add_(5|10)$"))
-
-            # Progress numeric input
-            self.application.add_handler(MessageHandler(filters.Regex(re.compile(r"^\\d+$")), self._handle_progress_number))
+            self.application.add_handler(CallbackQueryHandler(self._handle_progress_quick_add, pattern=r"^progress_add_-?\d+$"))
+            self.application.add_handler(CallbackQueryHandler(self._handle_progress_submit, pattern=r"^progress_submit$"))
+            self.application.add_handler(CallbackQueryHandler(self._handle_noop, pattern=r"^noop$"))
 
             # Reminder tick job
             if self.application.job_queue is not None:
@@ -127,6 +191,12 @@ class ReadingTrackerBot:
         except Exception as e:
             self.logger.error(f"❌ Failed to set up handlers: {e}")
             raise
+
+    async def _handle_noop(self, update, context):
+        try:
+            await update.callback_query.answer()
+        except Exception:
+            pass
 
     async def _handle_book_start(self, update, context):
         query = update.callback_query
@@ -165,6 +235,7 @@ class ReadingTrackerBot:
         query = update.callback_query
         await query.answer()
         amt_str = query.data.split('_')[-1]
+        self.logger.debug(f"progress quick add pressed: {amt_str}")
         if amt_str == '1' or amt_str == '-1':
             # adjust counter
             delta = 1 if amt_str == '1' else -1
@@ -178,8 +249,6 @@ class ReadingTrackerBot:
                 [InlineKeyboardButton("Submit", callback_data="progress_submit"), InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
             ])
             await query.edit_message_reply_markup(reply_markup=kb)
-            return
-        if amt_str == 'submit':
             return
         try:
             amt = int(amt_str)
@@ -210,11 +279,50 @@ class ReadingTrackerBot:
             msg += "\n🎉 Congratulations! You've completed this book! Share your achievement with friends!"
         await query.edit_message_text(msg, reply_markup=keyboard)
 
+    async def _handle_progress_submit(self, update, context):
+        query = update.callback_query
+        await query.answer()
+        amt = int(context.user_data.get('adjust_amount', 0))
+        self.logger.debug(f"progress submit pressed: {amt}")
+        if amt <= 0:
+            await query.edit_message_text("Please increase the amount above 0, then press Submit.")
+            return
+        book_id = context.user_data.get('current_book_id')
+        if not book_id:
+            await query.edit_message_text("No book selected. Use /progress.")
+            return
+        user_id = query.from_user.id
+        result = self.book_service.update_progress(user_id, book_id, amt)
+        if 'error' in result:
+            await query.edit_message_text(f"❌ {result['error']}")
+            return
+        bar = self._progress_bar(result['progress_percent'])
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
+        ])
+        msg = (
+            "📖 Progress Updated!\n\n"
+            f"➕ Added: {amt} pages\n"
+            f"📊 Total: {result['current_pages']}/{result['total_pages']} pages\n"
+            f"{bar} {result['progress_percent']}%\n"
+            f"📖 Remaining: {result['remaining_pages']} pages\n"
+        )
+        if result['is_completed']:
+            msg += "\n🎉 Congratulations! You've completed this book! Share your achievement with friends!"
+        await query.edit_message_text(msg, reply_markup=keyboard)
+
     async def _handle_progress_number(self, update, context):
         try:
             pages = int(update.message.text)
         except Exception:
             return
+        
+        # Check if we're in league creation flow
+        if context.user_data.get('creating_league'):
+            # Route to league creation handlers
+            await self.user_handlers._handle_league_creation_text(update, context)
+            return
+        
         book_id = context.user_data.get('current_book_id')
         if not book_id:
             return

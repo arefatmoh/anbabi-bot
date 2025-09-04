@@ -10,7 +10,6 @@ WELCOME_MESSAGE = """
 
 Your personal reading companion to make reading more engaging and rewarding.
 
-Choose your reading mode:
 """
 
 REGISTRATION_MESSAGE = """
@@ -37,12 +36,12 @@ Now let's choose your reading mode:
 MODE_SELECTION_MESSAGE = """
 📚 Choose your reading mode:
 
-🆕 **Individual Mode**
+🆕 <b>Individual Mode</b>
 • Read at your own pace
 • Choose any book you want
 • Personal progress tracking
 
-👥 **Community Mode**
+👥 <b>Community Mode</b>
 • Join reading leagues
 • Read together with others
 • Compete and encourage peers
@@ -85,7 +84,7 @@ Pages: 371
 LEAGUE_INVITATION = """
 👥 You've been invited to join:
 
-**{league_name}**
+<b>{league_name}</b>
 📖 Reading: {book_title}
 📅 Duration: {duration} days
 🎯 Daily Goal: {daily_goal} pages
@@ -195,7 +194,7 @@ ERROR_MESSAGES = {
 HELP_MESSAGE = """
 🤖 Read & Revive Bot - Help
 
-**Commands:**
+<b>Commands:</b>
 /start - Start the bot and register
 /help - Show this help message
 /progress - Update your reading progress
@@ -205,7 +204,7 @@ HELP_MESSAGE = """
 /reminder - Set reading reminders
 /profile - View and edit your profile
 
-**Features:**
+<b>Features:</b>
 📚 Individual and community reading modes
 📖 Track your reading progress
 📊 View your statistics and achievements
@@ -221,31 +220,31 @@ Need help? Contact the admin.
 ADMIN_HELP_MESSAGE = """
 🔧 Admin Commands
 
-**League Management:**
+<b>League Management:</b>
 /setbook - Set book for community league
 /league - Manage league settings
 /members - View league members
 /export - Export reading data
 
-**System Management:**
+<b>System Management:</b>
 /report - Generate system reports
 /backup - Create database backup
 /cleanup - Clean old data
 /stats - System statistics
 
-**User Management:**
+<b>User Management:</b>
 /users - View all users
 /ban - Ban user from bot
 /unban - Unban user
 """
 
 # League Management Messages
-LEAGUE_FULL_MESSAGE = """❌ **League is Full**
+LEAGUE_FULL_MESSAGE = """❌ <b>League is Full</b>
 
 This league has reached its maximum member limit."""
 
 # League Messages
-LEAGUE_WELCOME_MESSAGE = """🏆 **League Management**
+LEAGUE_WELCOME_MESSAGE = """🏆 <b>League Management</b>
 
 Welcome to the community reading leagues! Here you can:
 
@@ -256,13 +255,13 @@ Welcome to the community reading leagues! Here you can:
 
 Choose an option below:"""
 
-LEAGUE_BROWSE_MESSAGE = """🔍 **Available Leagues**
+LEAGUE_BROWSE_MESSAGE = """🔍 <b>Available Leagues</b>
 
 Found {count} league(s) you can join:
 
 Select a league to view details and join!"""
 
-LEAGUE_JOIN_SUCCESS = """✅ **League Joined Successfully!**
+LEAGUE_JOIN_SUCCESS = """✅ <b>League Joined Successfully!</b>
 
 {message}
 
@@ -274,58 +273,58 @@ You can now:
 
 Use /league to access your leagues."""
 
-LEAGUE_JOIN_FAILED = """❌ **Failed to Join League**
+LEAGUE_JOIN_FAILED = """❌ <b>Failed to Join League</b>
 
 {message}
 
 Please try again or contact the league admin."""
 
-LEAGUE_LEAVE_SUCCESS = """👋 **League Left Successfully**
+LEAGUE_LEAVE_SUCCESS = """👋 <b>League Left Successfully</b>
 
 {message}
 
 You can rejoin this league later if you change your mind."""
 
-LEAGUE_LEAVE_FAILED = """❌ **Failed to Leave League**
+LEAGUE_LEAVE_FAILED = """❌ <b>Failed to Leave League</b>
 
 {message}
 
 Please try again or contact support."""
 
-LEAGUE_NOT_FOUND = """❌ **League Not Found**
+LEAGUE_NOT_FOUND = """❌ <b>League Not Found</b>
 
 The requested league could not be found or may have been removed."""
 
-LEAGUE_ALREADY_MEMBER = """ℹ️ **Already a Member**
+LEAGUE_ALREADY_MEMBER = """ℹ️ <b>Already a Member</b>
 
 You are already a member of this league."""
 
 # Admin League Management Messages
-LEAGUE_CREATED = """🎉 **League Created Successfully!**
+LEAGUE_CREATED = """🎉 <b>League Created Successfully!</b>
 
-**League Name:** {name}
-**League ID:** {league_id}
+<b>League Name:</b> {name}
+<b>League ID:</b> {league_id}
 
 {message}
 
 The league is now active and ready for members to join!"""
 
-LEAGUE_MANAGEMENT_MENU = """⚙️ **League Management: {name}**
+LEAGUE_MANAGEMENT_MENU = """⚙️ <b>League Management: {name}</b>
 
 Manage your reading league with the options below:
 
-• **Manage Members** - Add/remove members
-• **League Stats** - View progress and analytics
-• **Edit Settings** - Modify league parameters
-• **End League** - Close the league
-• **Export Data** - Download league data
-• **Send Message** - Broadcast to all members"""
+• <b>Manage Members</b> - Add/remove members
+• <b>League Stats</b> - View progress and analytics
+• <b>Edit Settings</b> - Modify league parameters
+• <b>End League</b> - Close the league
+• <b>Export Data</b> - Download league data
+• <b>Send Message</b> - Broadcast to all members"""
 
-LEAGUE_EDIT_SUCCESS = """✅ **League Updated Successfully**
+LEAGUE_EDIT_SUCCESS = """✅ <b>League Updated Successfully</b>
 
 {field} has been updated to: {value}"""
 
-LEAGUE_EDIT_FAILED = """❌ **Failed to Update League**
+LEAGUE_EDIT_FAILED = """❌ <b>Failed to Update League</b>
 
 {error}
 

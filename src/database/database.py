@@ -69,7 +69,8 @@ class DatabaseManager:
                 registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_active BOOLEAN DEFAULT 1,
-                is_admin BOOLEAN DEFAULT 0
+                is_admin BOOLEAN DEFAULT 0,
+                is_banned BOOLEAN DEFAULT 0
             )
         ''')
         

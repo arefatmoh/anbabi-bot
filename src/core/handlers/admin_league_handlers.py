@@ -32,6 +32,11 @@ class AdminLeagueHandlers:
         self.league_service = league_service
         self.logger = logging.getLogger(__name__)
     
+    def _is_admin(self, user_id: int) -> bool:
+        """Check if user is an admin."""
+        from src.config.settings import ADMIN_USER_IDS
+        return user_id in ADMIN_USER_IDS
+    
     async def handle_create_league(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle league creation command."""
         try:
@@ -45,7 +50,7 @@ class AdminLeagueHandlers:
             
             # Start league creation conversation
             await update.message.reply_text(
-                "🏆 **Create New Reading League**\n\n"
+                "🏆 <b>Create New Reading League</b>\n\n"
                 "Let's create a new community reading league!\n\n"
                 "Please provide the league name:"
             )
@@ -75,7 +80,7 @@ class AdminLeagueHandlers:
             context.user_data['league_data']['name'] = league_name
             
             await update.message.reply_text(
-                f"📝 **League Name:** {league_name}\n\n"
+                f"📝 <b>League Name:</b> {league_name}\n\n"
                 "Now please provide a description (optional):\n"
                 "Or send 'skip' to continue without description."
             )
@@ -98,47 +103,205 @@ class AdminLeagueHandlers:
             
             context.user_data['league_data']['description'] = description
             
-            await update.message.reply_text(
-                "📚 Now please provide the book ID for this league:\n\n"
-                "You can use /books to see available books."
-            )
+            # Show available books as inline keyboard options
+            await self._show_available_books_for_league(update, context)
             
-            context.user_data['awaiting_book_id'] = True
+            context.user_data['awaiting_book_selection'] = True
             context.user_data['awaiting_description'] = False
             
         except Exception as e:
             self.logger.error(f"Failed to process league description: {e}")
             await update.message.reply_text("❌ Failed to process league description")
     
-    async def handle_league_book_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle league book ID input."""
+    async def _show_available_books_for_league(self, update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
+        """Show available books as inline keyboard options for league creation."""
         try:
-            if not context.user_data.get('awaiting_book_id'):
-                return
+            from src.database.database import db_manager
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             
-            try:
-                book_id = int(update.message.text.strip())
-            except ValueError:
+            # Get all available books from database
+            books_per_page = 5
+            offset = page * books_per_page
+            
+            with db_manager.get_connection() as conn:
+                cur = conn.cursor()
+                # Get total count
+                cur.execute("SELECT COUNT(*) FROM books")
+                total_books = cur.fetchone()[0]
+                
+                # Get books for current page
+                cur.execute("""
+                    SELECT book_id, title, author, total_pages 
+                    FROM books 
+                    ORDER BY book_id DESC 
+                    LIMIT ? OFFSET ?
+                """, (books_per_page, offset))
+                books = cur.fetchall()
+            
+            if not books and page == 0:
                 await update.message.reply_text(
-                    "❌ Please provide a valid book ID (number).\n"
-                    "Try again:"
+                    "❌ No books available. Please add some books first using the admin panel."
                 )
                 return
             
-            context.user_data['league_data']['book_id'] = book_id
+            # Pagination settings
+            total_pages = (total_books + books_per_page - 1) // books_per_page
+            
+            # Create inline keyboard with book options
+            keyboard = []
+            for book in books:
+                button_text = f"📖 {book['title']} by {book['author']} ({book['total_pages']} pages)"
+                callback_data = f"league_book_{book['book_id']}"
+                keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
+            # Add pagination buttons if needed
+            if total_pages > 1:
+                nav_buttons = []
+                if page > 0:
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"league_books_page_{page-1}"))
+                if page < total_pages - 1:
+                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"league_books_page_{page+1}"))
+                if nav_buttons:
+                    keyboard.append(nav_buttons)
+            
+            # Add cancel option
+            keyboard.append([InlineKeyboardButton("❌ Cancel League Creation", callback_data="league_cancel")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                "📅 Now please provide the league duration in days:\n\n"
-                "Recommended: 14-30 days for most books.\n"
-                "Default: 20 days"
+                f"📚 <b>Select a book for this league:</b>\n\n"
+                f"Page {page + 1} of {total_pages}\n"
+                f"Choose from the available books below:",
+                reply_markup=reply_markup
             )
             
-            context.user_data['awaiting_duration'] = True
-            context.user_data['awaiting_book_id'] = False
+        except Exception as e:
+            self.logger.error(f"Failed to show available books: {e}")
+            await update.message.reply_text("❌ Failed to load available books")
+    
+    async def handle_league_book_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle league book selection from inline keyboard."""
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            if not context.user_data.get('awaiting_book_selection'):
+                return
+            
+            if query.data == "league_cancel":
+                await query.edit_message_text("❌ League creation cancelled.")
+                # Clear league creation state
+                context.user_data.pop('creating_league', None)
+                context.user_data.pop('league_data', None)
+                context.user_data.pop('awaiting_book_selection', None)
+                return
+            
+            if query.data.startswith("league_books_page_"):
+                page = int(query.data.split("_")[-1])
+                await self._show_available_books_for_league(update, context, page)
+                return
+            
+            if query.data.startswith("league_book_"):
+                book_id = int(query.data.split("_")[-1])
+                
+                # Get book details
+                from src.database.database import db_manager
+                with db_manager.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        SELECT book_id, title, author, total_pages 
+                        FROM books 
+                        WHERE book_id = ?
+                    """, (book_id,))
+                    book = cur.fetchone()
+                
+                if not book:
+                    await query.edit_message_text("❌ Book not found. Please try again.")
+                    return
+                
+                # Store book data
+                context.user_data['league_data']['book_id'] = book_id
+                context.user_data['league_data']['book_title'] = book['title']
+                context.user_data['league_data']['book_author'] = book['author']
+                context.user_data['league_data']['book_pages'] = book['total_pages']
+                
+                await query.edit_message_text(
+                    f"📅 <b>Set Reading Duration</b>\n\n"
+                    f"📖 Book: {book['title']}\n"
+                    f"👤 Author: {book['author']}\n"
+                    f"📄 Pages: {book['total_pages']}\n\n"
+                    f"Enter the number of days for this reading league:"
+                )
+                
+                context.user_data['awaiting_duration'] = True
+                context.user_data['awaiting_book_selection'] = False
             
         except Exception as e:
-            self.logger.error(f"Failed to process league book ID: {e}")
-            await update.message.reply_text("❌ Failed to process league book ID")
+            self.logger.error(f"Failed to process league book selection: {e}")
+            await update.message.reply_text("❌ Failed to process book selection")
+    
+    async def handle_league_confirmation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle league confirmation from inline keyboard."""
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            if not context.user_data.get('awaiting_confirm'):
+                return
+            
+            if query.data == "league_confirm":
+                # Create the league
+                league_data = context.user_data['league_data']
+                
+                try:
+                    # Create league using the service
+                    success, message, league_id = self.league_service.create_league(
+                        name=league_data['name'],
+                        admin_id=update.effective_user.id,
+                        book_id=league_data['book_id'],
+                        duration_days=league_data.get('duration', 20),
+                        daily_goal=league_data.get('daily_goal', 20),
+                        max_members=league_data['max_members'],
+                        description=league_data.get('description')
+                    )
+                    
+                    if success:
+                        await query.edit_message_text(
+                            f"🎉 <b>League Created Successfully!</b>\n\n"
+                            f"📝 Name: {league_data['name']}\n"
+                            f"📖 Book: {league_data.get('book_title', 'Unknown')}\n"
+                            f"📅 Duration: {league_data.get('duration', 20)} days\n"
+                            f"🎯 Daily Goal: {league_data.get('daily_goal', 20)} pages\n"
+                            f"👥 Max Members: {league_data['max_members']}\n\n"
+                            f"League ID: {league_id}\n\n"
+                            f"Users can now join this league using the community features!"
+                        )
+                    else:
+                        await query.edit_message_text(f"❌ Failed to create league: {message}")
+                        return
+                    
+                    # Clear league creation state
+                    self._clear_league_creation_state(context)
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to create league: {e}")
+                    await query.edit_message_text("❌ Failed to create league. Please try again.")
+                    
+            elif query.data == "league_cancel_confirm":
+                await query.edit_message_text("❌ League creation cancelled.")
+                # Clear league creation state
+                self._clear_league_creation_state(context)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process league confirmation: {e}")
+            await update.message.reply_text("❌ Failed to process confirmation")
+    
+    async def handle_league_book_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle league book ID input (legacy method - kept for compatibility)."""
+        # This method is now replaced by handle_league_book_selection
+        # But we keep it for backward compatibility
+        pass
     
     async def handle_league_duration_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle league duration input."""
@@ -236,20 +399,31 @@ class AdminLeagueHandlers:
             league_data = context.user_data['league_data']
             league_data['max_members'] = max_members
             
-            # Confirmation step
+            # Confirmation step with inline keyboard
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            
             summary = (
-                "Please confirm the league details:\n\n"
-                f"Name: {league_data['name']}\n"
-                f"Description: {league_data.get('description') or '-'}\n"
-                f"Book ID: {league_data['book_id']}\n"
-                f"Duration: {league_data.get('duration', 20)} days\n"
-                f"Daily Goal: {league_data.get('daily_goal', 20)} pages\n"
-                f"Max Members: {league_data['max_members']}\n\n"
-                "Send 'confirm' to create or 'cancel' to abort."
+                "📋 <b>Please confirm the league details:</b>\n\n"
+                f"📝 Name: {league_data['name']}\n"
+                f"📄 Description: {league_data.get('description') or '-'}\n"
+                f"📖 Book: {league_data.get('book_title', 'Unknown')}\n"
+                f"👤 Author: {league_data.get('book_author', 'Unknown')}\n"
+                f"📚 Pages: {league_data.get('book_pages', 'Unknown')}\n"
+                f"📅 Duration: {league_data.get('duration', 20)} days\n"
+                f"🎯 Daily Goal: {league_data.get('daily_goal', 20)} pages\n"
+                f"👥 Max Members: {league_data['max_members']}\n\n"
+                "Please confirm or cancel:"
             )
+            
+            # Create inline keyboard for confirmation
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm & Create League", callback_data="league_confirm")],
+                [InlineKeyboardButton("❌ Cancel League Creation", callback_data="league_cancel_confirm")]
+            ])
+            
             context.user_data['awaiting_confirm'] = True
             context.user_data['awaiting_max_members'] = False
-            await update.message.reply_text(summary)
+            await update.message.reply_text(summary, reply_markup=keyboard)
         except Exception as e:
             self.logger.error(f"Failed to process league max members: {e}")
             await update.message.reply_text("❌ Failed to process league max members")

@@ -64,11 +64,16 @@ class LeagueRepository:
             
             row = cursor.fetchone()
             if row:
+                # Convert string dates to date objects
+                start_date = date.fromisoformat(row[5]) if row[5] else None
+                end_date = date.fromisoformat(row[6]) if row[6] else None
+                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
+                
                 return League(
                     league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=row[5],
-                    end_date=row[6], daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=row[10]
+                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
+                    end_date=end_date, daily_goal=row[7], max_members=row[8],
+                    status=LeagueStatus(row[9]), created_at=created_at
                 )
             return None
             
@@ -89,11 +94,16 @@ class LeagueRepository:
             
             leagues = []
             for row in cursor.fetchall():
+                # Convert string dates to date objects
+                start_date = date.fromisoformat(row[5]) if row[5] else None
+                end_date = date.fromisoformat(row[6]) if row[6] else None
+                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
+                
                 league = League(
                     league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=row[5],
-                    end_date=row[6], daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=row[10]
+                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
+                    end_date=end_date, daily_goal=row[7], max_members=row[8],
+                    status=LeagueStatus(row[9]), created_at=created_at
                 )
                 leagues.append(league)
             
@@ -101,6 +111,38 @@ class LeagueRepository:
             
         except Exception as e:
             self.logger.error(f"Failed to get active leagues: {e}")
+            raise
+    
+    def get_all_leagues(self) -> List[League]:
+        """Get all leagues (active and inactive)."""
+        try:
+            cursor = self.conn.cursor()
+            
+            cursor.execute("""
+                SELECT league_id, name, description, admin_id, current_book_id,
+                       start_date, end_date, daily_goal, max_members, status, created_at
+                FROM leagues ORDER BY created_at DESC
+            """)
+            
+            leagues = []
+            for row in cursor.fetchall():
+                # Convert string dates to date objects
+                start_date = date.fromisoformat(row[5]) if row[5] else None
+                end_date = date.fromisoformat(row[6]) if row[6] else None
+                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
+                
+                league = League(
+                    league_id=row[0], name=row[1], description=row[2],
+                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
+                    end_date=end_date, daily_goal=row[7], max_members=row[8],
+                    status=LeagueStatus(row[9]), created_at=created_at
+                )
+                leagues.append(league)
+            
+            return leagues
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get all leagues: {e}")
             raise
     
     def get_leagues_by_admin(self, admin_id: int) -> List[League]:
@@ -116,11 +158,16 @@ class LeagueRepository:
             
             leagues = []
             for row in cursor.fetchall():
+                # Convert string dates to date objects
+                start_date = date.fromisoformat(row[5]) if row[5] else None
+                end_date = date.fromisoformat(row[6]) if row[6] else None
+                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
+                
                 league = League(
                     league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=row[5],
-                    end_date=row[6], daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=row[10]
+                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
+                    end_date=end_date, daily_goal=row[7], max_members=row[8],
+                    status=LeagueStatus(row[9]), created_at=created_at
                 )
                 leagues.append(league)
             
@@ -262,11 +309,16 @@ class LeagueRepository:
             
             leagues = []
             for row in cursor.fetchall():
+                # Convert string dates to date objects
+                start_date = date.fromisoformat(row[5]) if row[5] else None
+                end_date = date.fromisoformat(row[6]) if row[6] else None
+                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
+                
                 league = League(
                     league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=row[5],
-                    end_date=row[6], daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=row[10]
+                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
+                    end_date=end_date, daily_goal=row[7], max_members=row[8],
+                    status=LeagueStatus(row[9]), created_at=created_at
                 )
                 leagues.append(league)
             

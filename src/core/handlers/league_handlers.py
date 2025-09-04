@@ -264,13 +264,13 @@ class LeagueHandlers:
                 return
             
             # Format leagues list
-            message = "🏆 **Your Leagues:**\n\n"
+            message = "🏆 <b>Your Leagues:</b>\n\n"
             for league in user_leagues:
                 member_count = self.league_service.league_repo.get_league_member_count(
                     league.league_id
                 )
                 message += (
-                    f"📚 **{league.name}**\n"
+                    f"📚 <b>{league.name}</b>\n"
                     f"   👥 Members: {member_count}/{league.max_members}\n"
                     f"   📅 Duration: {league.duration_days} days\n"
                     f"   🎯 Daily Goal: {league.daily_goal} pages\n"
@@ -322,17 +322,17 @@ class LeagueHandlers:
         """Format league details for display."""
         league = league_info['league']
         
-        message = f"📚 **{league['name']}**\n\n"
+        message = f"📚 <b>{league['name']}</b>\n\n"
         
         if league['description']:
             message += f"📝 {league['description']}\n\n"
         
         message += (
-            f"👥 **Members:** {league_info['member_count']}/{league['max_members']}\n"
-            f"📅 **Duration:** {league['duration_days']} days\n"
-            f"🎯 **Daily Goal:** {league['daily_goal']} pages\n"
-            f"📊 **Progress:** {league['progress_percentage']:.1f}%\n"
-            f"🏁 **Status:** {league['status']}\n\n"
+            f"👥 <b>Members:</b> {league_info['member_count']}/{league['max_members']}\n"
+            f"📅 <b>Duration:</b> {league['duration_days']} days\n"
+            f"🎯 <b>Daily Goal:</b> {league['daily_goal']} pages\n"
+            f"📊 <b>Progress:</b> {league['progress_percentage']:.1f}%\n"
+            f"🏁 <b>Status:</b> {league['status']}\n\n"
         )
         
         if league_info['is_member']:
@@ -378,3 +378,93 @@ class LeagueHandlers:
                 f"{row['rank']}. {name} — {row['progress_percent']}% ({row['pages_read']}/{row['total_pages']} pages)"
             )
         return "\n".join(lines)
+    
+    async def handle_league_stats_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle league stats callback from inline button."""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        user_leagues = self.league_service.get_user_leagues(user_id)
+        
+        if not user_leagues:
+            await query.edit_message_text(
+                "❌ You are not in any leagues. Use /league to join one.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back to League Menu", callback_data="league_main_menu")
+                ]])
+            )
+            return
+        
+        # Show stats for the first league (or let user choose)
+        league = user_leagues[0]
+        await self._show_league_stats(query, league.league_id)
+    
+    async def handle_league_leaderboard_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle league leaderboard callback from inline button."""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = update.effective_user.id
+        user_leagues = self.league_service.get_user_leagues(user_id)
+        
+        if not user_leagues:
+            await query.edit_message_text(
+                "❌ You are not in any leagues. Use /league to join one.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back to League Menu", callback_data="league_main_menu")
+                ]])
+            )
+            return
+        
+        # Show leaderboard for the first league (or let user choose)
+        league = user_leagues[0]
+        text = self._format_leaderboard(league.league_id, league.name)
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 Back to League Menu", callback_data="league_main_menu")
+        ]])
+        
+        await query.edit_message_text(text, reply_markup=keyboard)
+    
+    async def _show_league_stats(self, query, league_id: int) -> None:
+        """Show detailed league statistics."""
+        try:
+            league = self.league_service.league_repo.get_league_by_id(league_id)
+            if not league:
+                await query.edit_message_text("❌ League not found.")
+                return
+            
+            # Get league info
+            league_info = self.league_service.get_league_info(league_id, query.from_user.id)
+            if not league_info:
+                await query.edit_message_text("❌ Failed to get league information.")
+                return
+            
+            # Get leaderboard for stats
+            leaderboard = self.league_service.get_league_leaderboard(league_id)
+            
+            # Format stats message
+            message = f"📊 <b>League Statistics: {league.name}</b>\n\n"
+            message += f"👥 <b>Total Members:</b> {league_info['member_count']}/{league.max_members}\n"
+            message += f"📅 <b>Duration:</b> {league.duration_days} days\n"
+            message += f"🎯 <b>Daily Goal:</b> {league.daily_goal} pages\n"
+            message += f"📊 <b>League Progress:</b> {league.progress_percentage:.1f}%\n\n"
+            
+            if leaderboard:
+                message += f"🏆 <b>Top Performers:</b>\n"
+                for i, member in enumerate(leaderboard[:5]):
+                    name = member["full_name"] or ("@" + member["username"] if member["username"] else f"User {member['user_id']}")
+                    message += f"{i+1}. {name} — {member['progress_percent']:.1f}%\n"
+            else:
+                message += "📈 No progress data available yet.\n"
+            
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to League Menu", callback_data="league_main_menu")
+            ]])
+            
+            await query.edit_message_text(message, reply_markup=keyboard)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to show league stats: {e}")
+            await query.edit_message_text("❌ Failed to load league statistics.")

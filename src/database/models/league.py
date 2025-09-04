@@ -42,15 +42,42 @@ class League:
     @property
     def duration_days(self) -> int:
         """Calculate league duration in days."""
-        return (self.end_date - self.start_date).days
+        # Handle both string and date objects
+        if isinstance(self.start_date, str):
+            start_date = date.fromisoformat(self.start_date)
+        else:
+            start_date = self.start_date
+            
+        if isinstance(self.end_date, str):
+            end_date = date.fromisoformat(self.end_date)
+        else:
+            end_date = self.end_date
+            
+        return (end_date - start_date).days
     
     @property
     def is_active(self) -> bool:
         """Check if league is currently active."""
         today = date.today()
+        
+        # Handle both string and date objects
+        if isinstance(self.start_date, str):
+            start_date = date.fromisoformat(self.start_date)
+        else:
+            start_date = self.start_date
+            
+        if isinstance(self.end_date, str):
+            end_date = date.fromisoformat(self.end_date)
+        else:
+            end_date = self.end_date
+        
+        # For reading leagues, consider active if:
+        # 1. Status is ACTIVE
+        # 2. We haven't passed the end date yet
+        # 3. Start date can be in the future (for registration period)
         return (
             self.status == LeagueStatus.ACTIVE and
-            self.start_date <= today <= self.end_date
+            today <= end_date
         )
     
     @property
@@ -66,24 +93,40 @@ class League:
             return 100.0 if self.status == LeagueStatus.COMPLETED else 0.0
         
         total_days = self.duration_days
-        elapsed_days = (date.today() - self.start_date).days
+        
+        # Handle both string and date objects
+        if isinstance(self.start_date, str):
+            start_date = date.fromisoformat(self.start_date)
+        else:
+            start_date = self.start_date
+            
+        elapsed_days = (date.today() - start_date).days
         
         return min(100.0, max(0.0, (elapsed_days / total_days) * 100))
     
     def to_dict(self) -> Dict:
         """Convert league to dictionary."""
+        # Handle date/datetime objects that might be strings from database
+        def format_date(date_obj):
+            if isinstance(date_obj, str):
+                return date_obj
+            elif hasattr(date_obj, 'isoformat'):
+                return date_obj.isoformat()
+            else:
+                return str(date_obj)
+        
         return {
             'league_id': self.league_id,
             'name': self.name,
             'description': self.description,
             'admin_id': self.admin_id,
             'current_book_id': self.current_book_id,
-            'start_date': self.start_date.isoformat(),
-            'end_date': self.end_date.isoformat(),
+            'start_date': format_date(self.start_date),
+            'end_date': format_date(self.end_date),
             'daily_goal': self.daily_goal,
             'max_members': self.max_members,
             'status': self.status.value,
-            'created_at': self.created_at.isoformat(),
+            'created_at': format_date(self.created_at),
             'duration_days': self.duration_days,
             'is_active': self.is_active,
             'progress_percentage': self.progress_percentage

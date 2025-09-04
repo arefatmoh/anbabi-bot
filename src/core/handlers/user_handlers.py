@@ -19,6 +19,8 @@ from src.database.database import db_manager
 class UserHandlers:
     """Handles all user commands and interactions."""
     
+    PAGE_SIZE = 6
+
     def __init__(self):
         """Initialize user handlers."""
         self.logger = logging.getLogger(__name__)
@@ -66,6 +68,18 @@ class UserHandlers:
     
     async def handle_registration_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Unified registration handler for name and nickname steps."""
+        # Handle admin book addition flow
+        if context.user_data.get('adding_book'):
+            from src.core.handlers.admin_handlers import AdminHandlers
+            admin_handlers = AdminHandlers()
+            await admin_handlers.handle_book_addition(update, context)
+            return
+        
+        # Handle league creation flow
+        if context.user_data.get('creating_league'):
+            await self._handle_league_creation_text(update, context)
+            return
+        
         # Handle custom reminder time entry (12-hour with AM/PM also accepted)
         if context.user_data.get('awaiting_reminder_time'):
             t = self.reminder_service.parse_time(update.message.text.strip())
@@ -137,6 +151,11 @@ class UserHandlers:
             self.book_service.set_user_daily_goal(update.effective_user.id, val)
             context.user_data.pop('awaiting_goal_custom', None)
             await update.message.reply_text(f"✅ Daily goal set to {val} pages/day.")
+            # Show individual menu next
+            class Dummy: pass
+            d = Dummy(); d.edit_message_text = update.message.reply_text  # type: ignore
+            d.from_user = update.effective_user  # type: ignore
+            await self._show_individual_menu(d)
             return
         
         # Registration flow
@@ -204,7 +223,7 @@ class UserHandlers:
     async def _show_individual_menu(self, query):
         goal = self.book_service.get_user_daily_goal(query.from_user.id)
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📚 Start Reading", callback_data="ind_books"), InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book")],
+            [InlineKeyboardButton("📚 My Books", callback_data="ind_my_books"), InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book")],
             [InlineKeyboardButton("📖 Update Progress", callback_data="ind_progress")],
             [InlineKeyboardButton(f"🎯 Daily Goal: {goal}p", callback_data="ind_set_goal"), InlineKeyboardButton("⏰ Reminders", callback_data="ind_reminder")],
             [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats")],
@@ -214,7 +233,8 @@ class UserHandlers:
     async def _show_community_menu(self, query):
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse"), InlineKeyboardButton("👥 My Leagues", callback_data="com_my")],
-            [InlineKeyboardButton("🏆 Leaderboard", callback_data="com_leaderboard")],
+            [InlineKeyboardButton("📖 Update Progress", callback_data="com_progress"), InlineKeyboardButton("🏆 Leaderboard", callback_data="com_leaderboard")],
+            [InlineKeyboardButton("⏰ Reminders", callback_data="com_reminder"), InlineKeyboardButton("📊 My Stats", callback_data="com_stats")],
         ])
         await query.edit_message_text("Community Mode — choose an option:", reply_markup=keyboard)
     
@@ -222,14 +242,9 @@ class UserHandlers:
         q = update.callback_query
         await q.answer()
         action = q.data
-        if action == 'ind_books':
-            # reuse books flow
-            await q.edit_message_text("📚 Featured Books:")
-            class Dummy: pass
-            d = Dummy(); d.message = q.message  # type: ignore
-            await self.books_command(d, context)  # reuse sending
+        if action == 'ind_my_books':
+            await self._show_my_books(q, context, page=0)
         elif action == 'ind_add_book':
-            # Start step-by-step add flow
             context.user_data['add_book'] = {}
             context.user_data['add_book_step'] = 'title'
             await q.edit_message_text("📘 What's the book title?")
@@ -257,7 +272,6 @@ class UserHandlers:
             ])
             await q.edit_message_text(f"Current goal: {goal} pages/day. Choose a new goal:", reply_markup=kb)
         elif action.startswith('goal_'):
-            # handled by reminder inline elsewhere; placeholder
             pass
     
     async def handle_community_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -268,8 +282,147 @@ class UserHandlers:
             await self.league_handlers.handle_league_browse(update, context)
         elif action == 'com_my':
             await self.league_handlers.handle_league_my_leagues(update, context)
+        elif action == 'com_progress':
+            await self._handle_community_progress(q, context)
         elif action == 'com_leaderboard':
             await self.league_handlers.handle_leaderboard_command(q, context)  # type: ignore
+        elif action == 'com_reminder':
+            await self._handle_community_reminder(q, context)
+        elif action == 'com_stats':
+            await self._handle_community_stats(q, context)
+    
+    async def _handle_community_progress(self, query, context):
+        """Handle community progress update."""
+        try:
+            # Get user's leagues
+            user_leagues = self.league_handlers.league_service.get_user_leagues(query.from_user.id)
+            
+            if not user_leagues:
+                await query.edit_message_text(
+                    "📖 <b>Community Progress</b>\n\n"
+                    "You're not in any leagues yet. Join a league to start tracking community progress!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse")],
+                        [InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")]
+                    ])
+                )
+                return
+            
+            # Show leagues for progress update
+            keyboard = []
+            for league in user_leagues:
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📖 {league.name}",
+                        callback_data=f"com_progress_league_{league.league_id}"
+                    )
+                ])
+            
+            keyboard.append([InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")])
+            
+            await query.edit_message_text(
+                "📖 <b>Community Progress Update</b>\n\n"
+                "Choose a league to update your progress:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error handling community progress: {e}")
+            await query.edit_message_text("❌ Error loading community progress.")
+    
+    async def _handle_community_reminder(self, query, context):
+        """Handle community reminders."""
+        try:
+            # Get user's leagues
+            user_leagues = self.league_handlers.league_service.get_user_leagues(query.from_user.id)
+            
+            if not user_leagues:
+                await query.edit_message_text(
+                    "⏰ <b>Community Reminders</b>\n\n"
+                    "You're not in any leagues yet. Join a league to set community reminders!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse")],
+                        [InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")]
+                    ])
+                )
+                return
+            
+            # Show reminder options for leagues
+            keyboard = []
+            for league in user_leagues:
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"⏰ {league.name}",
+                        callback_data=f"com_reminder_league_{league.league_id}"
+                    )
+                ])
+            
+            keyboard.append([InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")])
+            
+            await query.edit_message_text(
+                "⏰ <b>Community Reminders</b>\n\n"
+                "Choose a league to set reminders:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error handling community reminders: {e}")
+            await query.edit_message_text("❌ Error loading community reminders.")
+    
+    async def _handle_community_stats(self, query, context):
+        """Handle community statistics."""
+        try:
+            # Get user's leagues
+            user_leagues = self.league_handlers.league_service.get_user_leagues(query.from_user.id)
+            
+            if not user_leagues:
+                await query.edit_message_text(
+                    "📊 <b>Community Stats</b>\n\n"
+                    "You're not in any leagues yet. Join a league to see community statistics!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse")],
+                        [InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")]
+                    ])
+                )
+                return
+            
+            # Show stats for each league
+            text = "📊 <b>Community Statistics</b>\n\n"
+            
+            for league in user_leagues:
+                # Get league leaderboard
+                leaderboard = self.league_handlers.league_service.get_league_leaderboard(league.league_id)
+                
+                text += f"<b>🏆 {league.name}</b>\n"
+                text += f"   Status: {league.status}\n"
+                text += f"   Members: {len(leaderboard)}\n"
+                
+                if leaderboard:
+                    # Find user's position
+                    user_position = None
+                    for i, member in enumerate(leaderboard):
+                        if member['user_id'] == query.from_user.id:
+                            user_position = i + 1
+                            text += f"   Your Rank: #{user_position}\n"
+                            text += f"   Your Progress: {member['progress_percent']:.1f}%\n"
+                            break
+                    
+                    if user_position is None:
+                        text += "   Your Progress: Not started\n"
+                else:
+                    text += "   No progress data yet\n"
+                
+                text += "\n"
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")]
+            ])
+            
+            await query.edit_message_text(text, reply_markup=keyboard)
+            
+        except Exception as e:
+            self.logger.error(f"Error handling community stats: {e}")
+            await query.edit_message_text("❌ Error loading community statistics.")
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(HELP_MESSAGE)
@@ -325,12 +478,12 @@ class UserHandlers:
         await self.league_handlers.handle_league_menu(update, context)
     
     async def reminder_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show reminder inline menu with common times and options (12-hour, Ethiopia time)."""
+        """Show reminder inline menu with common times and options"""
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("8:00 PM", callback_data="rem_time_2000"), InlineKeyboardButton("9:00 PM", callback_data="rem_time_2100"), InlineKeyboardButton("9:30 PM", callback_data="rem_time_2130")],
             [InlineKeyboardButton("Custom Time", callback_data="rem_custom"), InlineKeyboardButton("Disable", callback_data="rem_disable")],
         ])
-        await update.message.reply_text("Reminders — choose a time (Ethiopia time, GMT+3):", reply_markup=kb)
+        await update.message.reply_text("Reminders — choose a time", reply_markup=kb)
     
     async def handle_reminder_inline(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline reminder callbacks."""
@@ -356,7 +509,7 @@ class UserHandlers:
             return
         if data == 'rem_custom':
             context.user_data['awaiting_reminder_time'] = True
-            await q.edit_message_text("Send a time like 9:00 PM (or 21:00). Ethiopia time.")
+            await q.edit_message_text("Send a time like 9:00 PM ")
             return
     
     async def reminder_set(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -381,7 +534,7 @@ class UserHandlers:
         t = self.reminder_service.parse_time(str(r['reminder_time'])[:5])
         pretty = self.reminder_service.format_time_12h(t) if t else str(r['reminder_time'])[:5]
         await update.message.reply_text(
-            f"Reminder: {pretty} ({r['frequency']}) — Ethiopia time"
+            f"Reminder: {pretty} ({r['frequency']}) "
         )
     
     async def reminder_remove(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -394,3 +547,110 @@ class UserHandlers:
     async def profile_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /profile command."""
         await update.message.reply_text("Profile feature is coming next.")
+
+    async def handle_goal_inline(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline callbacks for setting individual daily goal."""
+        q = update.callback_query
+        await q.answer()
+        data = q.data
+        if not data.startswith('goal_'):
+            return
+        if data == 'goal_custom':
+            context.user_data['awaiting_goal_custom'] = True
+            await q.edit_message_text("Enter pages per day (number), e.g., 18")
+            return
+        try:
+            val = int(data.split('_')[-1])
+            if val <= 0:
+                raise ValueError()
+        except Exception:
+            await q.edit_message_text("Invalid goal value.")
+            return
+        self.book_service.set_user_daily_goal(q.from_user.id, val)
+        await self._show_individual_menu(q)
+
+    async def _show_my_books(self, query, context, page: int = 0):
+        user_id = query.from_user.id
+        all_books = self.book_service.get_user_books_with_status(user_id)
+        total = len(all_books)
+        if total == 0:
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book"), InlineKeyboardButton("🏠 Menu", callback_data="mode_individual")]])
+            await query.edit_message_text("You have no books yet.", reply_markup=kb)
+            return
+        start = page * self.PAGE_SIZE
+        end = start + self.PAGE_SIZE
+        books = all_books[start:end]
+        keyboard = []
+        for b in books:
+            title = f"{b['title']} ({b['display_status']})"
+            keyboard.append([InlineKeyboardButton(title, callback_data=f"ind_book_{b['book_id']}")])
+        nav = []
+        if start > 0:
+            nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"ind_my_books_page_{page-1}"))
+        if end < total:
+            nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"ind_my_books_page_{page+1}"))
+        if nav:
+            keyboard.append(nav)
+        keyboard.append([InlineKeyboardButton("🏠 Menu", callback_data="mode_individual")])
+        await query.edit_message_text(f"📚 My Books (Page {page+1}/{(total-1)//self.PAGE_SIZE+1}):", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    async def handle_my_books_page(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        await q.answer()
+        page = int(q.data.split('_')[-1])
+        await self._show_my_books(q, context, page=page)
+
+    async def handle_my_book_open(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        await q.answer()
+        book_id = int(q.data.split('_')[-1])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📖 Update Progress", callback_data=f"progress_select_{book_id}")],
+            [InlineKeyboardButton("🗑️ Delete", callback_data=f"ind_del_{book_id}")],
+            [InlineKeyboardButton("⬅️ Back to My Books", callback_data="ind_my_books")],
+        ])
+        await q.edit_message_text("Choose an action:", reply_markup=kb)
+
+    async def handle_delete_book_inline(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        await q.answer()
+        data = q.data
+        if data.startswith('ind_del_') and not data.startswith('ind_del_confirm_'):
+            book_id = int(data.split('_')[-1])
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"ind_del_confirm_{book_id}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="ind_my_books")],
+            ])
+            await q.edit_message_text("Are you sure you want to delete this book? This will remove your progress.", reply_markup=kb)
+            return
+        if data.startswith('ind_del_confirm_'):
+            book_id = int(data.split('_')[-1])
+            ok = self.book_service.delete_user_book(q.from_user.id, book_id)
+            if ok:
+                await self._show_my_books(q, context, page=0)
+            else:
+                await q.edit_message_text("Could not delete this book.")
+    
+    async def _handle_league_creation_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle text input during league creation."""
+        from src.core.handlers.admin_league_handlers import AdminLeagueHandlers
+        from src.services.factory import get_league_service
+        
+        league_service = get_league_service()
+        league_handlers = AdminLeagueHandlers(league_service)
+        
+        # Route to appropriate league creation handler based on current step
+        if context.user_data.get('awaiting_description'):
+            await league_handlers.handle_league_description_input(update, context)
+        elif context.user_data.get('awaiting_book_selection'):
+            # This is handled by callback handlers, not text input
+            pass
+        elif context.user_data.get('awaiting_duration'):
+            await league_handlers.handle_league_duration_input(update, context)
+        elif context.user_data.get('awaiting_daily_goal'):
+            await league_handlers.handle_league_daily_goal_input(update, context)
+        elif context.user_data.get('awaiting_max_members'):
+            await league_handlers.handle_league_max_members_input(update, context)
+        else:
+            # Default to name input
+            await league_handlers.handle_league_name_input(update, context)

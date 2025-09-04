@@ -132,6 +132,75 @@ class BookService:
                 )
             return result
 
+    def get_user_books_with_status(self, user_id: int) -> List[Dict]:
+        """Return all books for a user with status label and counts."""
+        with db_manager.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT ub.book_id, b.title, b.author, b.total_pages, ub.pages_read, ub.status
+                FROM user_books ub
+                JOIN books b ON b.book_id = ub.book_id
+                WHERE ub.user_id = ?
+                ORDER BY CASE ub.status WHEN 'active' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END, ub.start_date DESC
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
+            result: List[Dict] = []
+            for r in rows:
+                label = "Completed" if r[5] == 'completed' else f"{int(r[4] or 0)}/{int(r[3] or 0)}"
+                result.append(
+                    {
+                        "book_id": int(r[0]),
+                        "title": r[1],
+                        "author": r[2],
+                        "total_pages": int(r[3] or 0),
+                        "pages_read": int(r[4] or 0),
+                        "status": r[5],
+                        "display_status": label,
+                    }
+                )
+            return result
+
+    def delete_user_book(self, user_id: int, book_id: int) -> bool:
+        """Delete a user's registered book: remove sessions and user_books; delete book row if custom and unused."""
+        with db_manager.get_connection() as conn:
+            cur = conn.cursor()
+            # Ensure ownership exists
+            cur.execute(
+                "SELECT 1 FROM user_books WHERE user_id = ? AND book_id = ?",
+                (user_id, book_id),
+            )
+            if not cur.fetchone():
+                return False
+            # Delete reading sessions for this user/book
+            cur.execute(
+                "DELETE FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+                (user_id, book_id),
+            )
+            # Delete mapping
+            cur.execute(
+                "DELETE FROM user_books WHERE user_id = ? AND book_id = ?",
+                (user_id, book_id),
+            )
+            # If book is custom by this user and no one else uses it, delete it
+            cur.execute(
+                "SELECT is_featured, created_by FROM books WHERE book_id = ?",
+                (book_id,),
+            )
+            b = cur.fetchone()
+            if b and int(b[0] or 0) == 0 and int(b[1] or 0) == user_id:
+                cur.execute(
+                    "SELECT COUNT(*) FROM user_books WHERE book_id = ?",
+                    (book_id,),
+                )
+                cnt = int(cur.fetchone()[0] or 0)
+                if cnt == 0:
+                    cur.execute("DELETE FROM books WHERE book_id = ?", (book_id,))
+            conn.commit()
+            return True
+
     def update_progress(self, user_id: int, book_id: int, pages_read: int) -> Dict:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
