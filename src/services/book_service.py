@@ -10,6 +10,31 @@ from src.database.database import db_manager
 class BookService:
     """Provides book listing and user reading operations."""
 
+    def get_user_daily_goal(self, user_id: int) -> int:
+        with db_manager.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT daily_goal FROM users WHERE user_id = ?", (user_id,))
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return 20
+            try:
+                return int(row[0])
+            except Exception:
+                return 20
+
+    def set_user_daily_goal(self, user_id: int, pages_per_day: int) -> None:
+        with db_manager.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO users (user_id, daily_goal, username, full_name, city, contact)
+                VALUES (?, ?, '', '', '', '')
+                ON CONFLICT(user_id) DO UPDATE SET daily_goal = excluded.daily_goal
+                """,
+                (user_id, pages_per_day),
+            )
+            conn.commit()
+
     def get_featured_books(self) -> List[Dict]:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
@@ -30,6 +55,29 @@ class BookService:
                 }
                 for r in rows
             ]
+
+    def add_custom_book_and_start(self, user_id: int, title: str, author: str, total_pages: int) -> int:
+        """Create a user-added book and start reading it. Returns book_id."""
+        with db_manager.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO books (title, author, total_pages, category, description, cover_image, is_featured, created_by)
+                VALUES (?, ?, ?, '', '', '', 0, ?)
+                """,
+                (title, author, total_pages, user_id),
+            )
+            book_id = cur.lastrowid
+            # Start reading for user
+            cur.execute(
+                """
+                INSERT INTO user_books (user_id, book_id, start_date, pages_read, status)
+                VALUES (?, ?, CURRENT_TIMESTAMP, 0, 'active')
+                """,
+                (user_id, book_id),
+            )
+            conn.commit()
+            return book_id
 
     def start_reading(self, user_id: int, book_id: int) -> bool:
         with db_manager.get_connection() as conn:
