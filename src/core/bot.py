@@ -74,8 +74,13 @@ class ReadingTrackerBot:
 
             # Mode selection and submenus
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_mode_callback, pattern="^mode_(individual|community)$"))
-            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^ind_(books|progress|stats|reminder)$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^ind_(books|add_book|progress|stats|reminder|set_goal)$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_action, pattern="^com_(browse|my|leaderboard)$"))
+
+            # Goal inline callbacks
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_goal_inline, pattern=r"^goal_(\d+|custom)$"))
+            # Reminder inline callbacks
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_reminder_inline, pattern=r"^rem_(menu|time_\d{4}|disable|custom)$"))
 
             # Admin: league creation + edits
             self.application.add_handler(CommandHandler('setbook', self.admin_league_handlers.handle_create_league))
@@ -147,16 +152,40 @@ class ReadingTrackerBot:
         await query.answer()
         book_id = int(query.data.split('_')[-1])
         context.user_data['current_book_id'] = book_id
+        goal = self.book_service.get_user_daily_goal(query.from_user.id)
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ +5", callback_data="progress_add_5"), InlineKeyboardButton("➕ +10", callback_data="progress_add_10")],
-            [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
+            [InlineKeyboardButton(f"➕ +{goal}", callback_data=f"progress_add_{goal}"), InlineKeyboardButton("➕ +5", callback_data="progress_add_5"), InlineKeyboardButton("➕ +10", callback_data="progress_add_10")],
+            [InlineKeyboardButton("➖", callback_data="progress_add_-1"), InlineKeyboardButton(f"{goal}", callback_data="noop"), InlineKeyboardButton("➕", callback_data="progress_add_1")],
+            [InlineKeyboardButton("Submit", callback_data="progress_submit"), InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
         ])
-        await query.edit_message_text("Choose quick add (+5/+10) or enter pages read (number):", reply_markup=keyboard)
+        context.user_data['adjust_amount'] = goal
+        await query.edit_message_text("Choose quick add, adjust counter, or enter pages (number):", reply_markup=keyboard)
 
     async def _handle_progress_quick_add(self, update, context):
         query = update.callback_query
         await query.answer()
-        amt = int(query.data.split('_')[-1])
+        amt_str = query.data.split('_')[-1]
+        if amt_str == '1' or amt_str == '-1':
+            # adjust counter
+            delta = 1 if amt_str == '1' else -1
+            current = int(context.user_data.get('adjust_amount', self.book_service.get_user_daily_goal(query.from_user.id)))
+            new_val = max(0, current + delta)
+            context.user_data['adjust_amount'] = new_val
+            # rebuild keyboard with updated center
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"➕ +{self.book_service.get_user_daily_goal(query.from_user.id)}", callback_data=f"progress_add_{self.book_service.get_user_daily_goal(query.from_user.id)}"), InlineKeyboardButton("➕ +5", callback_data="progress_add_5"), InlineKeyboardButton("➕ +10", callback_data="progress_add_10")],
+                [InlineKeyboardButton("➖", callback_data="progress_add_-1"), InlineKeyboardButton(f"{new_val}", callback_data="noop"), InlineKeyboardButton("➕", callback_data="progress_add_1")],
+                [InlineKeyboardButton("Submit", callback_data="progress_submit"), InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
+            ])
+            await query.edit_message_reply_markup(reply_markup=kb)
+            return
+        if amt_str == 'submit':
+            return
+        try:
+            amt = int(amt_str)
+        except Exception:
+            await query.edit_message_text("Invalid amount.")
+            return
         book_id = context.user_data.get('current_book_id')
         if not book_id:
             await query.edit_message_text("No book selected. Use /progress.")
@@ -168,7 +197,6 @@ class ReadingTrackerBot:
             return
         bar = self._progress_bar(result['progress_percent'])
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ +5", callback_data="progress_add_5"), InlineKeyboardButton("➕ +10", callback_data="progress_add_10")],
             [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
         ])
         msg = (
@@ -197,7 +225,6 @@ class ReadingTrackerBot:
             return
         bar = self._progress_bar(result['progress_percent'])
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ +5", callback_data="progress_add_5"), InlineKeyboardButton("➕ +10", callback_data="progress_add_10")],
             [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
         ])
         msg = (

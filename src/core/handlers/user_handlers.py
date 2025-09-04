@@ -66,6 +66,80 @@ class UserHandlers:
     
     async def handle_registration_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Unified registration handler for name and nickname steps."""
+        # Handle custom reminder time entry (12-hour with AM/PM also accepted)
+        if context.user_data.get('awaiting_reminder_time'):
+            t = self.reminder_service.parse_time(update.message.text.strip())
+            if not t:
+                await update.message.reply_text("Invalid time. Use h:MM AM/PM (e.g., 9:00 PM) or 24h HH:MM")
+                return
+            self.reminder_service.set_reminder(update.effective_user.id, t, "daily")
+            context.user_data.pop('awaiting_reminder_time', None)
+            pretty = self.reminder_service.format_time_12h(t)
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="mode_individual")]])
+            await update.message.reply_text(f"✅ Reminder set for {pretty} (Ethiopia time).", reply_markup=kb)
+            return
+        
+        # Handle step-by-step custom book flow
+        add_step = context.user_data.get('add_book_step')
+        if add_step:
+            if add_step == 'title':
+                title = update.message.text.strip()
+                if len(title) < 2:
+                    await update.message.reply_text("Please provide a valid title.")
+                    return
+                context.user_data['add_book']['title'] = title
+                context.user_data['add_book_step'] = 'author'
+                await update.message.reply_text("✍️ Who is the author?")
+                return
+            if add_step == 'author':
+                author = update.message.text.strip()
+                if len(author) < 2:
+                    await update.message.reply_text("Please provide a valid author name.")
+                    return
+                context.user_data['add_book']['author'] = author
+                context.user_data['add_book_step'] = 'pages'
+                await update.message.reply_text("📄 How many total pages does it have? (number)")
+                return
+            if add_step == 'pages':
+                try:
+                    pages = int(update.message.text.strip())
+                    if pages <= 0:
+                        raise ValueError()
+                except Exception:
+                    await update.message.reply_text("Total pages must be a positive number.")
+                    return
+                data = context.user_data.get('add_book', {})
+                book_id = self.book_service.add_custom_book_and_start(
+                    update.effective_user.id,
+                    data.get('title', ''),
+                    data.get('author', ''),
+                    pages,
+                )
+                # Clear state
+                context.user_data.pop('add_book_step', None)
+                context.user_data.pop('add_book', None)
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📖 Update Progress", callback_data=f"progress_select_{book_id}")],
+                    [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
+                ])
+                await update.message.reply_text("✅ Your book has been added and started. What next?", reply_markup=keyboard)
+                return
+        
+        # Custom goal input
+        if context.user_data.get('awaiting_goal_custom'):
+            try:
+                val = int(update.message.text.strip())
+                if val <= 0:
+                    raise ValueError()
+            except Exception:
+                await update.message.reply_text("Please enter a positive number.")
+                return
+            self.book_service.set_user_daily_goal(update.effective_user.id, val)
+            context.user_data.pop('awaiting_goal_custom', None)
+            await update.message.reply_text(f"✅ Daily goal set to {val} pages/day.")
+            return
+        
+        # Registration flow
         step = context.user_data.get('reg_step')
         if step == 'name':
             name = update.message.text.strip()
@@ -85,8 +159,11 @@ class UserHandlers:
                     cur = conn.cursor()
                     cur.execute(
                         """
-                        INSERT OR REPLACE INTO users (user_id, username, full_name, city, contact)
-                        VALUES (?, ?, ?, COALESCE(city,''), COALESCE(contact,''))
+                        INSERT INTO users (user_id, username, full_name, city, contact)
+                        VALUES (?, ?, ?, '', '')
+                        ON CONFLICT(user_id) DO UPDATE SET
+                            username = excluded.username,
+                            full_name = excluded.full_name
                         """,
                         (
                             update.effective_user.id,
@@ -101,7 +178,6 @@ class UserHandlers:
             context.user_data.pop('reg_step', None)
             context.user_data.pop('reg_name', None)
             return
-        # If no registration step, ignore
         return
     
     async def handle_mode_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -126,9 +202,12 @@ class UserHandlers:
             await update.edit_message_text(MODE_SELECTION_MESSAGE, reply_markup=keyboard)  # type: ignore
     
     async def _show_individual_menu(self, query):
+        goal = self.book_service.get_user_daily_goal(query.from_user.id)
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📚 Start Reading", callback_data="ind_books"), InlineKeyboardButton("📖 Update Progress", callback_data="ind_progress")],
-            [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("⏰ Reminders", callback_data="ind_reminder")],
+            [InlineKeyboardButton("📚 Start Reading", callback_data="ind_books"), InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book")],
+            [InlineKeyboardButton("📖 Update Progress", callback_data="ind_progress")],
+            [InlineKeyboardButton(f"🎯 Daily Goal: {goal}p", callback_data="ind_set_goal"), InlineKeyboardButton("⏰ Reminders", callback_data="ind_reminder")],
+            [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats")],
         ])
         await query.edit_message_text("Individual Mode — choose an option:", reply_markup=keyboard)
     
@@ -149,6 +228,11 @@ class UserHandlers:
             class Dummy: pass
             d = Dummy(); d.message = q.message  # type: ignore
             await self.books_command(d, context)  # reuse sending
+        elif action == 'ind_add_book':
+            # Start step-by-step add flow
+            context.user_data['add_book'] = {}
+            context.user_data['add_book_step'] = 'title'
+            await q.edit_message_text("📘 What's the book title?")
         elif action == 'ind_progress':
             await q.edit_message_text("📖 Update your reading progress:")
             class Dummy: pass
@@ -164,6 +248,17 @@ class UserHandlers:
             class Dummy: pass
             d = Dummy(); d.message = q.message  # type: ignore
             await self.reminder_command(d, context)
+        elif action == 'ind_set_goal':
+            goal = self.book_service.get_user_daily_goal(q.from_user.id)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("10", callback_data="goal_10"), InlineKeyboardButton("15", callback_data="goal_15"), InlineKeyboardButton("20", callback_data="goal_20")],
+                [InlineKeyboardButton("25", callback_data="goal_25"), InlineKeyboardButton("30", callback_data="goal_30"), InlineKeyboardButton("Custom", callback_data="goal_custom")],
+                [InlineKeyboardButton("Back", callback_data="mode_individual")],
+            ])
+            await q.edit_message_text(f"Current goal: {goal} pages/day. Choose a new goal:", reply_markup=kb)
+        elif action.startswith('goal_'):
+            # handled by reminder inline elsewhere; placeholder
+            pass
     
     async def handle_community_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
@@ -230,29 +325,63 @@ class UserHandlers:
         await self.league_handlers.handle_league_menu(update, context)
     
     async def reminder_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
-            "Reminders:\n/reminder_set HH:MM — set daily reminder\n/reminder_view — show reminder\n/reminder_remove — disable reminder"
-        )
+        """Show reminder inline menu with common times and options (12-hour, Ethiopia time)."""
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("8:00 PM", callback_data="rem_time_2000"), InlineKeyboardButton("9:00 PM", callback_data="rem_time_2100"), InlineKeyboardButton("9:30 PM", callback_data="rem_time_2130")],
+            [InlineKeyboardButton("Custom Time", callback_data="rem_custom"), InlineKeyboardButton("Disable", callback_data="rem_disable")],
+        ])
+        await update.message.reply_text("Reminders — choose a time (Ethiopia time, GMT+3):", reply_markup=kb)
+    
+    async def handle_reminder_inline(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline reminder callbacks."""
+        q = update.callback_query
+        await q.answer()
+        data = q.data
+        if data == 'rem_menu':
+            return await self.reminder_command(q, context)  # type: ignore
+        if data.startswith('rem_time_'):
+            hhmm = data.split('_')[-1]
+            hh = hhmm[:2]; mm = hhmm[2:]
+            t = self.reminder_service.parse_time(f"{hh}:{mm}")
+            if not t:
+                await q.edit_message_text("Invalid time.")
+                return
+            self.reminder_service.set_reminder(q.from_user.id, t, "daily")
+            pretty = self.reminder_service.format_time_12h(t)
+            await q.edit_message_text(f"✅ Reminder set for {pretty} (Ethiopia time).")
+            return
+        if data == 'rem_disable':
+            ok = self.reminder_service.remove_reminder(q.from_user.id)
+            await q.edit_message_text("✅ Reminder disabled." if ok else "No reminder to disable.")
+            return
+        if data == 'rem_custom':
+            context.user_data['awaiting_reminder_time'] = True
+            await q.edit_message_text("Send a time like 9:00 PM (or 21:00). Ethiopia time.")
+            return
     
     async def reminder_set(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if not args:
-            await update.message.reply_text("Usage: /reminder_set HH:MM (24h)")
+            await update.message.reply_text("Usage: /reminder_set 9:00 PM (or 21:00)")
             return
-        t = self.reminder_service.parse_time(args[0])
+        t = self.reminder_service.parse_time(" ".join(args))
         if not t:
-            await update.message.reply_text("Invalid time format. Use HH:MM (24h)")
+            await update.message.reply_text("Invalid time format. Use h:MM AM/PM or 24h HH:MM")
             return
         self.reminder_service.set_reminder(update.effective_user.id, t, "daily")
-        await update.message.reply_text(f"✅ Reminder set for {args[0]} daily.")
+        pretty = self.reminder_service.format_time_12h(t)
+        await update.message.reply_text(f"✅ Reminder set for {pretty} (Ethiopia time).")
     
     async def reminder_view(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         r = self.reminder_service.get_reminder(update.effective_user.id)
         if not r or not r["is_active"]:
             await update.message.reply_text("No active reminder.")
             return
+        # r['reminder_time'] is HH:MM:SS string — parse and format 12h
+        t = self.reminder_service.parse_time(str(r['reminder_time'])[:5])
+        pretty = self.reminder_service.format_time_12h(t) if t else str(r['reminder_time'])[:5]
         await update.message.reply_text(
-            f"Reminder: {str(r['reminder_time'])[:5]} ({r['frequency']})"
+            f"Reminder: {pretty} ({r['frequency']}) — Ethiopia time"
         )
     
     async def reminder_remove(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
