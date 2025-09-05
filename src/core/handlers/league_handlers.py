@@ -49,10 +49,19 @@ class LeagueHandlers:
                     reply_markup=keyboard
                 )
             else:
-                await update.callback_query.edit_message_text(
-                    LEAGUE_WELCOME_MESSAGE,
-                    reply_markup=keyboard
-                )
+                # Try to edit the message, but handle "Message is not modified" error gracefully
+                try:
+                    await update.callback_query.edit_message_text(
+                        LEAGUE_WELCOME_MESSAGE,
+                        reply_markup=keyboard
+                    )
+                except Exception as edit_error:
+                    if "Message is not modified" in str(edit_error):
+                        # Message content is the same, just answer the callback
+                        await update.callback_query.answer()
+                    else:
+                        # Re-raise other errors
+                        raise edit_error
             
         except Exception as e:
             self.logger.error(f"Failed to show league menu: {e}")
@@ -296,15 +305,29 @@ class LeagueHandlers:
     
     async def handle_leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show leaderboard for the user's most recent league (simple default)."""
-        user_id = update.effective_user.id
-        # pick first league for user
-        leagues = self.league_service.get_user_leagues(user_id)
-        if not leagues:
-            await update.message.reply_text("You are not in any leagues. Use /league to join one.")
-            return
-        league = leagues[0]
-        text = self._format_leaderboard(league.league_id, league.name)
-        await update.message.reply_text(text)
+        # Handle both message commands and callback queries
+        if update.message:
+            user_id = update.effective_user.id
+            # pick first league for user
+            leagues = self.league_service.get_user_leagues(user_id)
+            if not leagues:
+                await update.message.reply_text("You are not in any leagues. Use /league to join one.")
+                return
+            league = leagues[0]
+            text = self._format_leaderboard(league.league_id, league.name)
+            await update.message.reply_text(text)
+        elif update.callback_query:
+            query = update.callback_query
+            await query.answer()
+            user_id = query.from_user.id
+            # pick first league for user
+            leagues = self.league_service.get_user_leagues(user_id)
+            if not leagues:
+                await query.edit_message_text("You are not in any leagues. Use /league to join one.")
+                return
+            league = leagues[0]
+            text = self._format_leaderboard(league.league_id, league.name)
+            await query.edit_message_text(text)
 
     async def handle_leaderboard_view(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle leaderboard view from inline button: league_lb_{id}."""

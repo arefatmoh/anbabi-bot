@@ -265,6 +265,71 @@ class BookService:
                 "pages_read_today": pages_read,
             }
 
+    def update_progress_with_context(self, user_id: int, book_id: int, pages_read: int, league_id: Optional[int] = None) -> Dict:
+        """Update progress and record session with optional league context."""
+        with db_manager.get_connection() as conn:
+            cur = conn.cursor()
+            # get total pages
+            cur.execute("SELECT total_pages FROM books WHERE book_id = ?", (book_id,))
+            book = cur.fetchone()
+            if not book:
+                return {"error": "Book not found"}
+            total_pages = int(book[0])
+
+            # update total pages_read for user_books
+            cur.execute(
+                """
+                UPDATE user_books
+                SET pages_read = pages_read + ?, last_updated = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND book_id = ? AND status = 'active'
+                """,
+                (pages_read, user_id, book_id),
+            )
+
+            # current pages
+            cur.execute(
+                """
+                SELECT pages_read FROM user_books
+                WHERE user_id = ? AND book_id = ?
+                """,
+                (user_id, book_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"error": "Reading session not found"}
+            current_pages = int(row[0])
+
+            # mark completed if needed
+            is_completed = current_pages >= total_pages
+            if is_completed:
+                cur.execute(
+                    """
+                    UPDATE user_books SET status = 'completed' WHERE user_id = ? AND book_id = ?
+                    """,
+                    (user_id, book_id),
+                )
+
+            # insert reading session with league context
+            cur.execute(
+                """
+                INSERT INTO reading_sessions (user_id, book_id, league_id, session_date, pages_read)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, book_id, league_id, date.today(), pages_read),
+            )
+            conn.commit()
+
+            progress_percent = round((current_pages / total_pages) * 100, 1) if total_pages else 0.0
+            remaining_pages = max(0, total_pages - current_pages)
+            return {
+                "current_pages": current_pages,
+                "total_pages": total_pages,
+                "progress_percent": progress_percent,
+                "remaining_pages": remaining_pages,
+                "is_completed": is_completed,
+                "pages_read_today": pages_read,
+            }
+
     def get_user_stats(self, user_id: int) -> Dict:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()

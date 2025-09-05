@@ -93,6 +93,44 @@ class UserHandlers:
             await update.message.reply_text(f"✅ Reminder set for {pretty} (Ethiopia time).", reply_markup=kb)
             return
         
+        # Handle community reminder custom time entry
+        if context.user_data.get('setting_community_reminder'):
+            t = self.reminder_service.parse_time(update.message.text.strip())
+            if not t:
+                await update.message.reply_text("Invalid time. Use h:MM AM/PM (e.g., 9:00 PM) or 24h HH:MM")
+                return
+            
+            league_id = context.user_data.get('community_reminder_league_id')
+            if league_id:
+                result = self.reminder_service.set_reminder(update.effective_user.id, t.hour, t.minute, league_id=league_id)
+                if result['success']:
+                    # Get league info for confirmation
+                    league = self.league_handlers.league_service.get_league_by_id(league_id)
+                    league_name = league.name if league else f"League {league_id}"
+                    
+                    pretty = self.reminder_service.format_time_12h(t)
+                    message = f"✅ <b>Community Reminder Set!</b>\n\n"
+                    message += f"⏰ <b>Time:</b> {pretty} (Ethiopia time)\n"
+                    message += f"📚 <b>League:</b> {league_name}\n"
+                    message += f"🎯 <b>Daily Goal:</b> {league.daily_goal if league else 'N/A'} pages\n\n"
+                    message += "You'll receive daily reminders to read your league book!"
+                    
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back to Reminders", callback_data="com_reminder")],
+                        [InlineKeyboardButton("🏠 Community Menu", callback_data="mode_community")]
+                    ])
+                    
+                    await update.message.reply_text(message, reply_markup=keyboard)
+                else:
+                    await update.message.reply_text(f"❌ {result['error']}")
+            else:
+                await update.message.reply_text("❌ Error: League ID not found.")
+            
+            # Clean up context
+            context.user_data.pop('setting_community_reminder', None)
+            context.user_data.pop('community_reminder_league_id', None)
+            return
+        
         # Handle step-by-step custom book flow
         add_step = context.user_data.get('add_book_step')
         if add_step:
@@ -204,8 +242,15 @@ class UserHandlers:
         await query.answer()
         mode = query.data.split('_')[-1]
         if mode == 'individual':
+            # Clear community mode context
+            context.user_data.pop('current_league_id', None)
+            context.user_data.pop('community_mode', None)
             await self._show_individual_menu(query)
         else:
+            # Set community mode context
+            context.user_data['community_mode'] = True
+            # Preserve league context - don't clear current_league_id
+            # This allows users to maintain their league context when navigating
             await self._show_community_menu(query)
     
     async def _show_mode_menu(self, update: Update):
@@ -226,7 +271,7 @@ class UserHandlers:
             [InlineKeyboardButton("📚 My Books", callback_data="ind_my_books"), InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book")],
             [InlineKeyboardButton("📖 Update Progress", callback_data="ind_progress")],
             [InlineKeyboardButton(f"🎯 Daily Goal: {goal}p", callback_data="ind_set_goal"), InlineKeyboardButton("⏰ Reminders", callback_data="ind_reminder")],
-            [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats")],
+            [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
         ])
         await query.edit_message_text("Individual Mode — choose an option:", reply_markup=keyboard)
     
@@ -235,6 +280,7 @@ class UserHandlers:
             [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse"), InlineKeyboardButton("👥 My Leagues", callback_data="com_my")],
             [InlineKeyboardButton("📖 Update Progress", callback_data="com_progress"), InlineKeyboardButton("🏆 Leaderboard", callback_data="com_leaderboard")],
             [InlineKeyboardButton("⏰ Reminders", callback_data="com_reminder"), InlineKeyboardButton("📊 My Stats", callback_data="com_stats")],
+            [InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
         ])
         await query.edit_message_text("Community Mode — choose an option:", reply_markup=keyboard)
     
@@ -278,6 +324,9 @@ class UserHandlers:
         q = update.callback_query
         await q.answer()
         action = q.data
+        
+        # Ensure community mode context is set for all community actions
+        context.user_data['community_mode'] = True
         if action == 'com_browse':
             await self.league_handlers.handle_league_browse(update, context)
         elif action == 'com_my':
@@ -285,7 +334,7 @@ class UserHandlers:
         elif action == 'com_progress':
             await self._handle_community_progress(q, context)
         elif action == 'com_leaderboard':
-            await self.league_handlers.handle_leaderboard_command(q, context)  # type: ignore
+            await self.league_handlers.handle_leaderboard_command(update, context)
         elif action == 'com_reminder':
             await self._handle_community_reminder(q, context)
         elif action == 'com_stats':
@@ -330,6 +379,132 @@ class UserHandlers:
             self.logger.error(f"Error handling community progress: {e}")
             await query.edit_message_text("❌ Error loading community progress.")
     
+    async def handle_community_progress_league(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle community progress update for a specific league."""
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            # Extract league ID from callback data
+            league_id = int(query.data.split('_')[-1])
+            
+            # Get league info
+            league = self.league_handlers.league_service.league_repo.get_league_by_id(league_id)
+            if not league:
+                await query.edit_message_text("❌ League not found.")
+                return
+            
+            # Check if user is a member of this league
+            user_id = query.from_user.id
+            is_member = self.league_handlers.league_service.league_repo.is_user_member(league_id, user_id)
+            
+            if not is_member:
+                await query.edit_message_text(
+                    "❌ You're not a member of this league.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
+                    ]])
+                )
+                return
+            
+            # Get user's books for this league
+            user_books = self.book_service.get_user_books_with_status(user_id)
+            league_books = [book for book in user_books if book.get('book_id') == league.current_book_id]
+            
+            if not league_books:
+                # User hasn't started reading the league book yet, start it automatically
+                success = self.book_service.start_reading(user_id, league.current_book_id)
+                if success:
+                    # Get the book details from database
+                    from src.database.database import db_manager
+                    with db_manager.get_connection() as conn:
+                        cur = conn.cursor()
+                        cur.execute(
+                            "SELECT title, author, total_pages FROM books WHERE book_id = ?",
+                            (league.current_book_id,)
+                        )
+                        book_data = cur.fetchone()
+                    
+                    if book_data:
+                        # Create a book object for the progress update
+                        book = {
+                            'book_id': league.current_book_id,
+                            'title': book_data[0],
+                            'author': book_data[1],
+                            'total_pages': book_data[2],
+                            'pages_read': 0,
+                            'status': 'active'
+                        }
+                        league_books = [book]
+                    else:
+                        await query.edit_message_text(
+                            f"❌ Error: League book not found.",
+                            reply_markup=InlineKeyboardMarkup([[
+                                InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
+                            ]])
+                        )
+                        return
+                else:
+                    await query.edit_message_text(
+                        f"❌ Error: Could not start reading the league book.",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
+                        ]])
+                    )
+                    return
+            
+            if not league_books:
+                await query.edit_message_text(
+                    f"❌ Error: Could not load league book information.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
+                    ]])
+                )
+                return
+            
+            # Show progress update options for the league book
+            book = league_books[0]
+            progress_percent = (book['pages_read'] / book['total_pages']) * 100 if book['total_pages'] > 0 else 0
+            
+            # Set context data for progress submit handlers
+            context.user_data['current_book_id'] = book['book_id']
+            context.user_data['adjust_amount'] = league.daily_goal
+            context.user_data['current_league_id'] = league_id
+            context.user_data['community_mode'] = True  # Ensure community mode is set
+            
+            message = f"📖 <b>Progress Update: {league.name}</b>\n\n"
+            message += f"📚 <b>Book:</b> {book['title']}\n"
+            message += f"👤 <b>Author:</b> {book['author']}\n"
+            message += f"📊 <b>Current Progress:</b> {book['pages_read']}/{book['total_pages']} pages ({progress_percent:.1f}%)\n"
+            message += f"🎯 <b>Daily Goal:</b> {league.daily_goal} pages\n\n"
+            message += "How many pages did you read today?"
+            
+            # Create progress update keyboard
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(f"+{league.daily_goal}", callback_data=f"progress_add_{league.daily_goal}"),
+                    InlineKeyboardButton("+5", callback_data="progress_add_5"),
+                    InlineKeyboardButton("+10", callback_data="progress_add_10")
+                ],
+                [
+                    InlineKeyboardButton("[-]", callback_data="progress_add_-1"),
+                    InlineKeyboardButton(f"[{league.daily_goal}]", callback_data="progress_counter"),
+                    InlineKeyboardButton("[+]", callback_data="progress_add_1")
+                ],
+                [
+                    InlineKeyboardButton("Submit", callback_data="progress_submit")
+                ],
+                [
+                    InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
+                ]
+            ])
+            
+            await query.edit_message_text(message, reply_markup=keyboard)
+            
+        except Exception as e:
+            self.logger.error(f"Error handling community progress league: {e}")
+            await query.edit_message_text("❌ Error loading league progress update.")
+    
     async def _handle_community_reminder(self, query, context):
         """Handle community reminders."""
         try:
@@ -368,6 +543,182 @@ class UserHandlers:
         except Exception as e:
             self.logger.error(f"Error handling community reminders: {e}")
             await query.edit_message_text("❌ Error loading community reminders.")
+    
+    async def handle_community_reminder_league(self, update, context):
+        """Handle community reminder league selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Ensure community mode context is set
+        context.user_data['community_mode'] = True
+        
+        try:
+            # Extract league ID from callback data
+            league_id = int(query.data.split('_')[-1])
+            
+            # Get league information
+            league = self.league_handlers.league_service.get_league_by_id(league_id)
+            if not league:
+                await query.edit_message_text("❌ League not found.")
+                return
+            
+            # Check if user is a member of this league
+            user_id = query.from_user.id
+            if not self.league_handlers.league_service.is_user_member(user_id, league_id):
+                await query.edit_message_text("❌ You are not a member of this league.")
+                return
+            
+            # Show reminder options for this league
+            message = f"⏰ <b>Set Reminder for {league.name}</b>\n\n"
+            message += f"📚 <b>Book:</b> {league.book_title}\n"
+            message += f"🎯 <b>Daily Goal:</b> {league.daily_goal} pages\n\n"
+            message += "Choose when you'd like to be reminded to read:"
+            
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🌅 Morning (8:00 AM)", callback_data=f"com_reminder_time_{league_id}_0800"),
+                    InlineKeyboardButton("🌞 Afternoon (2:00 PM)", callback_data=f"com_reminder_time_{league_id}_1400")
+                ],
+                [
+                    InlineKeyboardButton("🌆 Evening (6:00 PM)", callback_data=f"com_reminder_time_{league_id}_1800"),
+                    InlineKeyboardButton("🌙 Night (9:00 PM)", callback_data=f"com_reminder_time_{league_id}_2100")
+                ],
+                [
+                    InlineKeyboardButton("⏰ Custom Time", callback_data=f"com_reminder_custom_{league_id}")
+                ],
+                [
+                    InlineKeyboardButton("🔕 Disable Reminder", callback_data=f"com_reminder_disable_{league_id}")
+                ],
+                [
+                    InlineKeyboardButton("⬅️ Back to Reminders", callback_data="com_reminder")
+                ]
+            ])
+            
+            await query.edit_message_text(message, reply_markup=keyboard)
+            
+        except Exception as e:
+            self.logger.error(f"Error handling community reminder league: {e}")
+            await query.edit_message_text("❌ Error loading league reminder options.")
+    
+    async def handle_community_reminder_time(self, update, context):
+        """Handle community reminder time selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Ensure community mode context is set
+        context.user_data['community_mode'] = True
+        
+        try:
+            # Extract league ID and time from callback data
+            parts = query.data.split('_')
+            league_id = int(parts[3])
+            time_str = parts[4]  # Format: HHMM
+            
+            # Parse time
+            hour = int(time_str[:2])
+            minute = int(time_str[2:])
+            
+            # Set reminder for the league
+            user_id = query.from_user.id
+            result = self.reminder_service.set_reminder(user_id, hour, minute, league_id=league_id)
+            
+            if result['success']:
+                # Get league info for confirmation
+                league = self.league_handlers.league_service.get_league_by_id(league_id)
+                league_name = league.name if league else f"League {league_id}"
+                
+                message = f"✅ <b>Reminder Set!</b>\n\n"
+                message += f"⏰ <b>Time:</b> {hour:02d}:{minute:02d} (Ethiopia time)\n"
+                message += f"📚 <b>League:</b> {league_name}\n"
+                message += f"🎯 <b>Daily Goal:</b> {league.daily_goal if league else 'N/A'} pages\n\n"
+                message += "You'll receive daily reminders to read your league book!"
+                
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back to Reminders", callback_data="com_reminder")],
+                    [InlineKeyboardButton("🏠 Community Menu", callback_data="mode_community")]
+                ])
+                
+                await query.edit_message_text(message, reply_markup=keyboard)
+            else:
+                await query.edit_message_text(f"❌ {result['error']}")
+                
+        except Exception as e:
+            self.logger.error(f"Error setting community reminder time: {e}")
+            await query.edit_message_text("❌ Error setting reminder.")
+    
+    async def handle_community_reminder_custom(self, update, context):
+        """Handle community reminder custom time input."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Ensure community mode context is set
+        context.user_data['community_mode'] = True
+        
+        try:
+            # Extract league ID from callback data
+            league_id = int(query.data.split('_')[-1])
+            
+            # Set context for custom time input
+            context.user_data['setting_community_reminder'] = True
+            context.user_data['community_reminder_league_id'] = league_id
+            
+            # Get league info
+            league = self.league_handlers.league_service.get_league_by_id(league_id)
+            league_name = league.name if league else f"League {league_id}"
+            
+            message = f"⏰ <b>Custom Reminder Time for {league_name}</b>\n\n"
+            message += "Please enter your preferred reminder time in one of these formats:\n\n"
+            message += "• <b>24-hour format:</b> 14:30 (2:30 PM)\n"
+            message += "• <b>12-hour format:</b> 2:30 PM or 2:30pm\n\n"
+            message += "⏰ <b>Note:</b> All times are in Ethiopia time (GMT+3)"
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back to Reminders", callback_data="com_reminder")]
+            ])
+            
+            await query.edit_message_text(message, reply_markup=keyboard)
+            
+        except Exception as e:
+            self.logger.error(f"Error handling community reminder custom: {e}")
+            await query.edit_message_text("❌ Error setting up custom reminder.")
+    
+    async def handle_community_reminder_disable(self, update, context):
+        """Handle community reminder disable."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Ensure community mode context is set
+        context.user_data['community_mode'] = True
+        
+        try:
+            # Extract league ID from callback data
+            league_id = int(query.data.split('_')[-1])
+            
+            # Disable reminder for the league
+            user_id = query.from_user.id
+            result = self.reminder_service.disable_reminder(user_id, league_id=league_id)
+            
+            if result['success']:
+                # Get league info for confirmation
+                league = self.league_handlers.league_service.get_league_by_id(league_id)
+                league_name = league.name if league else f"League {league_id}"
+                
+                message = f"🔕 <b>Reminder Disabled</b>\n\n"
+                message += f"📚 <b>League:</b> {league_name}\n\n"
+                message += "You will no longer receive daily reminders for this league."
+                
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back to Reminders", callback_data="com_reminder")],
+                    [InlineKeyboardButton("🏠 Community Menu", callback_data="mode_community")]
+                ])
+                
+                await query.edit_message_text(message, reply_markup=keyboard)
+            else:
+                await query.edit_message_text(f"❌ {result['error']}")
+                
+        except Exception as e:
+            self.logger.error(f"Error disabling community reminder: {e}")
+            await query.edit_message_text("❌ Error disabling reminder.")
     
     async def _handle_community_stats(self, query, context):
         """Handle community statistics."""
@@ -451,7 +802,12 @@ class UserHandlers:
             return
         if len(active) == 1:
             context.user_data['current_book_id'] = active[0]['book_id']
-            await update.message.reply_text(PROGRESS_UPDATE_MESSAGE)
+            # Add inline keyboard for progress update options
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📖 Update Progress", callback_data=f"progress_select_{active[0]['book_id']}")],
+                [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")]
+            ])
+            await update.message.reply_text(PROGRESS_UPDATE_MESSAGE, reply_markup=keyboard)
             return
         keyboard = []
         for book in active:

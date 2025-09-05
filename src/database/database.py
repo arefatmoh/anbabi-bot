@@ -169,7 +169,69 @@ class DatabaseManager:
                 description TEXT,
                 earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 metadata TEXT,
+                is_notified BOOLEAN DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+        
+        # User statistics table for gamification
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_stats (
+                user_id INTEGER PRIMARY KEY,
+                current_streak INTEGER DEFAULT 0,
+                longest_streak INTEGER DEFAULT 0,
+                total_achievements INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 1,
+                xp INTEGER DEFAULT 0,
+                books_completed INTEGER DEFAULT 0,
+                total_pages_read INTEGER DEFAULT 0,
+                last_reading_date DATE,
+                streak_start_date DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+        
+        # Motivation messages table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS motivation_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                message_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_read BOOLEAN DEFAULT 0,
+                metadata TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+        
+        # Visual elements table for progress bars, badges, certificates
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS visual_elements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                element_type TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+        
+        # Achievement definitions table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS achievement_definitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT UNIQUE NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                icon TEXT,
+                xp_reward INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
@@ -193,6 +255,11 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_reading_sessions_user_date ON reading_sessions(user_id, session_date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_league_members_league ON league_members(league_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_achievements_type ON achievements(type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_stats_user ON user_stats(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_motivation_messages_user ON motivation_messages(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_visual_elements_user ON visual_elements(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_achievement_definitions_type ON achievement_definitions(type)')
     
     def _insert_default_data(self, cursor: sqlite3.Cursor):
         """Insert default data into the database."""
@@ -204,6 +271,69 @@ class DatabaseManager:
                 INSERT OR IGNORE INTO books (title, author, total_pages, category, description, is_featured)
                 VALUES (?, ?, ?, ?, ?, 1)
             ''', (book['title'], book['author'], book['total_pages'], book['category'], book['description']))
+        
+        # Insert default achievement definitions
+        default_achievements = [
+            # Enhanced Streak achievements with Bronze/Silver/Gold/Diamond levels
+            # Bronze Level (1-30 days)
+            ('1_day_streak', '🥉 First Step', 'Started your reading journey', '🥉', 10),
+            ('3_day_streak', '🥉 First Spark', 'You\'ve built your first streak 🔥 Keep going!', '🥉', 25),
+            ('7_day_streak', '🥉 One Week Reader', '1 full week of reading! Consistency pays off 🌱', '🥉', 50),
+            ('14_day_streak', '🥉 Two-Week Challenger', 'Two weeks strong! Building momentum', '🥉', 100),
+            ('21_day_streak', '🥉 Habit Builder', '21 days = new habit formed 💪', '🥉', 150),
+            ('30_day_streak', '🥉 One Month Champion', 'One month of consistent reading!', '🥉', 200),
+            
+            # Silver Level (31-100 days)
+            ('50_day_streak', '🥈 Golden Streak', '50 days of dedication! Shining bright', '🥈', 400),
+            ('75_day_streak', '🥈 Dedicated Reader', '75 days! Your dedication is inspiring', '🥈', 600),
+            ('100_day_streak', '🥈 Century Club', '100 days! Welcome to the Century Club 🎉', '🥈', 1000),
+            
+            # Gold Level (101-250 days)
+            ('150_day_streak', '🥇 Unstoppable', '150 days! You are truly unstoppable', '🥇', 1500),
+            ('200_day_streak', '🥇 Marathon Mind', '200 days! Your mind is a reading marathon', '🥇', 2000),
+            ('250_day_streak', '🥇 Knowledge Seeker', '250 days! A true seeker of knowledge', '🥇', 2500),
+            
+            # Diamond Level (251+ days)
+            ('300_day_streak', '💎 Book Sage', '300 days! You are a true book sage', '💎', 3000),
+            ('365_day_streak', '💎 One-Year Legend', '365 days! You are a reading legend 👑', '💎', 5000),
+            
+            # Book completion achievements
+            ('first_book', '📖 First Book', 'Complete your first book', '📖', 100),
+            ('5_books', '📚 Book Collector', 'Complete 5 books', '📚', 300),
+            ('10_books', '📚 Book Lover', 'Complete 10 books', '📚', 600),
+            ('25_books', '📚 Book Enthusiast', 'Complete 25 books', '📚', 1500),
+            ('50_books', '📚 Book Master', 'Complete 50 books', '📚', 3000),
+            
+            # Page reading achievements
+            ('100_pages', '📄 Page Turner', 'Read 100 pages', '📄', 50),
+            ('500_pages', '📄 Page Reader', 'Read 500 pages', '📄', 200),
+            ('1000_pages', '📄 Page Devourer', 'Read 1000 pages', '📄', 500),
+            ('5000_pages', '📄 Page Master', 'Read 5000 pages', '📄', 2000),
+            
+            # Reading style achievements
+            ('speed_reader', '⚡ Speed Reader', 'Read 50+ pages in a single day', '⚡', 100),
+            ('consistent_reader', '📅 Consistent Reader', 'Read every day for a week', '📅', 150),
+            ('marathon_reader', '🏃 Marathon Reader', 'Read 100+ pages in a single day', '🏃', 200),
+            
+            # Community achievements
+            ('community_contributor', '🌟 Community Star', 'Participate in a reading league', '🌟', 100),
+            ('league_champion', '🏆 League Champion', 'Win a reading league', '🏆', 500),
+            
+            # League-specific achievements
+            ('league_100_pages', '🏆 League 100 Pages', 'Read 100 pages in a league', '🏆', 20),
+            ('league_500_pages', '🏆 League 500 Pages', 'Read 500 pages in a league', '🏆', 100),
+            ('league_1000_pages', '🏆 League 1000 Pages', 'Read 1000 pages in a league', '🏆', 200),
+            ('league_2000_pages', '🏆 League 2000 Pages', 'Read 2000 pages in a league', '🏆', 400),
+            ('league_first_book', '📚 League First Book', 'Complete your first book in a league', '📚', 150),
+            ('league_weekly_leader', '👑 Weekly Leader', 'Top reader for a week in a league', '👑', 300),
+            ('league_monthly_champion', '🏆 Monthly Champion', 'Top reader for a month in a league', '🏆', 600),
+        ]
+        
+        for achievement_type, title, description, icon, xp_reward in default_achievements:
+            cursor.execute('''
+                INSERT OR IGNORE INTO achievement_definitions (type, title, description, icon, xp_reward)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (achievement_type, title, description, icon, xp_reward))
     
     def backup_database(self, backup_path: str) -> bool:
         """Create a backup of the database."""
@@ -223,7 +353,8 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 
                 # Get table counts
-                tables = ['users', 'books', 'leagues', 'user_books', 'reading_sessions', 'achievements']
+                tables = ['users', 'books', 'leagues', 'user_books', 'reading_sessions', 'achievements', 
+                         'user_stats', 'motivation_messages', 'visual_elements', 'achievement_definitions']
                 table_counts = {}
                 
                 for table in tables:
