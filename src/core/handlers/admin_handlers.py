@@ -39,6 +39,7 @@ class AdminHandlers:
             [InlineKeyboardButton("📚 Book Management", callback_data="admin_books"), InlineKeyboardButton("🏆 League Management", callback_data="admin_leagues")],
             [InlineKeyboardButton("👥 User Management", callback_data="admin_users"), InlineKeyboardButton("📊 Analytics & Reports", callback_data="admin_analytics")],
             [InlineKeyboardButton("⚙️ System Settings", callback_data="admin_system"), InlineKeyboardButton("🔧 Maintenance", callback_data="admin_maintenance")],
+            [InlineKeyboardButton("🗄️ Database Info", callback_data="admin_database")],
         ])
         
         await update.message.reply_text(
@@ -55,6 +56,38 @@ class AdminHandlers:
         if not self._is_admin(query.from_user.id):
             await query.edit_message_text("❌ Access denied. Admin privileges required.")
             return
+        
+        if query.data == "admin_database":
+            await self.show_database_info(update, context)
+    
+    async def show_database_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show database information."""
+        try:
+            info = db_manager.get_database_info()
+            
+            # Format database info
+            db_info = f"🗄️ <b>Database Information</b>\n\n"
+            db_info += f"📁 <b>Path:</b> {info.get('database_path', 'Unknown')}\n"
+            db_info += f"💾 <b>Size:</b> {info.get('database_size_mb', 0)} MB\n\n"
+            
+            # Add table counts
+            table_counts = info.get('table_counts', {})
+            if table_counts:
+                db_info += "📋 <b>Table Records:</b>\n"
+                for table, count in table_counts.items():
+                    db_info += f"• {table}: {count} records\n"
+            else:
+                db_info += "❌ No table information available\n"
+            
+            # Add back button
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_back")]
+            ])
+            
+            await query.edit_message_text(db_info, reply_markup=keyboard, parse_mode='HTML')
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error getting database info: {e}")
         
         action = query.data.split('_', 1)[1]  # Remove 'admin_' prefix
         

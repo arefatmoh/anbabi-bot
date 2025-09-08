@@ -710,8 +710,24 @@ class ReadingTrackerBot:
         try:
             self.logger.info("🚀 Starting Read & Revive Bot...")
             self._setup_handlers()
-            self.logger.info("📡 Starting bot polling...")
-            self.application.run_polling()
+            
+            # Check if we should use webhooks (for production) or polling (for development)
+            from src.config.settings import WEBHOOK_URL
+            import os
+            
+            if WEBHOOK_URL and os.getenv('RAILWAY_ENVIRONMENT'):
+                # Production mode with webhooks
+                self.logger.info("🌐 Starting bot with webhooks...")
+                self.application.run_webhook(
+                    listen="0.0.0.0",
+                    port=int(os.getenv('PORT', 8000)),
+                    webhook_url=WEBHOOK_URL
+                )
+            else:
+                # Development mode with polling
+                self.logger.info("📡 Starting bot polling...")
+                self.application.run_polling()
+                
         except Exception as e:
             self.logger.error(f"❌ Failed to start bot: {e}")
             raise

@@ -63,6 +63,23 @@ def main():
         logger.info(f"📁 Working directory: {ROOT_DIR}")
         logger.info(f"📁 Source path: {SRC_DIR}")
 
+        # Initialize database
+        from src.database.database import db_manager
+        logger.info("📊 Initializing database...")
+        db_manager.init_database()
+        logger.info("✅ Database initialized successfully")
+        
+        # Log database info
+        info = db_manager.get_database_info()
+        logger.info(f"📊 Database Information:")
+        logger.info(f"  📁 Path: {info.get('database_path', 'Unknown')}")
+        logger.info(f"  💾 Size: {info.get('database_size_mb', 0)} MB")
+        table_counts = info.get('table_counts', {})
+        if table_counts:
+            logger.info("  📋 Tables:")
+            for table, count in table_counts.items():
+                logger.info(f"    • {table}: {count} records")
+
         # Create and start the bot
         bot = ReadingTrackerBot()
         bot.start()
