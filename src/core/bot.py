@@ -559,6 +559,12 @@ class ReadingTrackerBot:
         except Exception:
             return
         
+        # Check if we're in registration flow
+        if context.user_data.get('reg_step') == 'phone':
+            # Route to registration handler
+            await self.user_handlers.handle_registration_text(update, context)
+            return
+        
         # Check if we're in league creation flow
         if context.user_data.get('creating_league'):
             # Route to league creation handlers

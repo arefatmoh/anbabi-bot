@@ -4,6 +4,7 @@ User command handlers.
 This module contains all the user command handlers for the bot.
 """
 
+import asyncio
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
@@ -56,7 +57,13 @@ class UserHandlers:
             
             # Import the global keyboard from bot.py
             from src.core.bot import GLOBAL_MODE_KEYBOARD
-            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)
+            from src.config.messages import DEMO_PAGE_MESSAGE
+            
+            # Send demo page message first
+            await update.message.reply_text(DEMO_PAGE_MESSAGE, parse_mode='HTML')
+            # Wait a moment then send mode selection
+            await asyncio.sleep(2)
+            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD, parse_mode='HTML')
             return
         # New user: begin minimal registration
         await update.message.reply_text(WELCOME_MESSAGE)
@@ -277,10 +284,24 @@ class UserHandlers:
     async def _show_mode_menu(self, update: Update):
         # Import the global keyboard from bot.py
         from src.core.bot import GLOBAL_MODE_KEYBOARD
+        from src.config.messages import DEMO_PAGE_MESSAGE
+        
+        # Send demo page message first
         if update.message:
-            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)
+            await update.message.reply_text(DEMO_PAGE_MESSAGE, parse_mode='HTML')
+            # Wait a moment then send mode selection
+            await asyncio.sleep(2)
+            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD, parse_mode='HTML')
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(DEMO_PAGE_MESSAGE, parse_mode='HTML')
+            # Wait a moment then send mode selection
+            await asyncio.sleep(2)
+            await update.callback_query.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD, parse_mode='HTML')
         else:
-            await update.edit_message_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)  # type: ignore
+            # Fallback for other cases
+            await update.message.reply_text(DEMO_PAGE_MESSAGE, parse_mode='HTML')
+            await asyncio.sleep(2)
+            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD, parse_mode='HTML')
     
     async def _show_individual_menu(self, query):
         goal = self.book_service.get_user_daily_goal(query.from_user.id)

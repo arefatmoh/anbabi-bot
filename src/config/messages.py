@@ -32,9 +32,29 @@ REGISTRATION_SUCCESS = """
 Now let's choose your reading mode:
 """
 
+# Demo Page Message
+DEMO_PAGE_MESSAGE = """
+🎉 <b>Welcome to Your Reading Journey!</b> 🎉
+
+Before we begin, I have something special for you! 
+
+✨ <b>Discover the Full Experience</b> ✨
+
+Want to see exactly how amazing your reading journey will be? Check out our interactive <a href="https://index-one-theta.vercel.app/">anbabi-bot demo page</a> to explore:
+
+🎯 <b>Live Features Preview</b>
+🚀 <b>See It In Action</b>
+• Try the features before using them
+• Understand the complete flow
+• Get inspired by the possibilities
+• Experience the full bot capabilities
+
+💫 <b>Trust me, you'll love what you see!</b>
+"""
+
 # Reading Mode Selection
 MODE_SELECTION_MESSAGE = """
-📚 Choose your reading mode:
+📚 <b>Choose your reading mode:</b>
 
 🆕 <b>Individual Mode</b>
 • Read at your own pace
@@ -46,7 +66,7 @@ MODE_SELECTION_MESSAGE = """
 • Read together with others
 • Compete and encourage peers
 
-<b><i>You can switch anytime between the modes. enjoy solo reading and community challenges! </i></b>
+<b><i>You can switch anytime between the modes. Enjoy solo reading and community challenges!</i></b>
 
 Which mode would you prefer?
 """
