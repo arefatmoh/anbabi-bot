@@ -61,7 +61,33 @@ PROGRESS_ACHIEVEMENTS:
 ```
 
 ---
+### **3. Level Assessment Algorithm**
+�� Scoring System (0-100 points total):
+Books Completed (0-30 points): 3 points per book, max 30
+Total Pages Read (0-25 points): 1 point per 100 pages, max 25
+Daily Consistency (0-20 points):
+50+ pages/day = 20 points
+30+ pages/day = 15 points
+20+ pages/day = 10 points
+10+ pages/day = 5 points
+Achievements (0-15 points): 2 points per achievement, max 15
 
+Reading Streak (0-10 points):
+100+ days = 10 points
+30+ days = 7 points
+7+ days = 5 points
+3+ days = 3 points
+1+ days = 1 point
+�� Reading Levels:
+Beginner (0-19 points): New to reading
+Novice (20-39 points): Building reading habits
+Intermediate (40-59 points): Consistent reader
+Advanced (60-79 points): Experienced reader
+Master (80+ points): Reading expert
+Automatic Updates:
+Reading level is recalculated every time the profile is updated
+Level changes are logged for tracking
+System considers all user metrics for fair assessment
 ## 🚀 **Implementation Steps**
 
 ### **Step 1: Database Schema & Models**

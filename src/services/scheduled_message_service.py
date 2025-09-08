@@ -12,6 +12,7 @@ import random
 
 from src.database.database import db_manager
 from src.services.motivation_service import MotivationService
+import re
 from src.config.motivational_quotes import get_random_quote, get_quote_by_category
 from src.config.reading_hints import get_random_hint, get_hint_by_category
 
@@ -48,8 +49,8 @@ class ScheduledMessageService:
             sent_count = 0
             for user_id in active_users:
                 try:
-                    # Create personalized message
-                    message = f"🌅 *Good Morning!*\n\n⭐️ {quote}\n\n💪 Have a great reading day! 📚✨"
+                    # Create personalized message (HTML formatting)
+                    message = f"🌅 <b>Good Morning!</b>\n\n⭐️ {quote}\n\n💪 Have a great reading day! 📚✨"
                     
                     # Store motivation message in database
                     self.motivation_service._create_motivation_message(
@@ -60,7 +61,7 @@ class ScheduledMessageService:
                     # Send message via bot if context is available
                     if context and hasattr(context, 'bot'):
                         try:
-                            await context.bot.send_message(chat_id=user_id, text=message, parse_mode='Markdown')
+                            await context.bot.send_message(chat_id=user_id, text=message, parse_mode='HTML')
                             sent_count += 1
                         except Exception as e:
                             self.logger.error(f"Failed to send morning quote to user {user_id}: {e}")
@@ -88,15 +89,16 @@ class ScheduledMessageService:
                 self.logger.info("No active users found for afternoon hints")
                 return
             
-            # Get a reading hint
-            hint = get_random_hint()
+            # Get a reading hint and ensure it's HTML-safe (convert Markdown **bold** to <b>bold</b>)
+            raw_hint = get_random_hint()
+            hint = re.sub(r"\*\*(.+?)\*\*", r"<b>\\1</b>", raw_hint)
             
             # Send to all active users
             sent_count = 0
             for user_id in active_users:
                 try:
-                    # Create personalized message
-                    message = f"📖 *Reading Tip of the Day*\n\n💡 {hint}\n\nHappy reading! 📚✨"
+                    # Create personalized message (HTML formatting)
+                    message = f"📖 <b>Reading Tip of the Day</b>\n\n💡 {hint}\n\nHappy reading! 📚✨"
                     
                     # Store motivation message in database
                     self.motivation_service._create_motivation_message(
@@ -107,7 +109,7 @@ class ScheduledMessageService:
                     # Send message via bot if context is available
                     if context and hasattr(context, 'bot'):
                         try:
-                            await context.bot.send_message(chat_id=user_id, text=message, parse_mode='Markdown')
+                            await context.bot.send_message(chat_id=user_id, text=message, parse_mode='HTML')
                             sent_count += 1
                         except Exception as e:
                             self.logger.error(f"Failed to send afternoon hint to user {user_id}: {e}")

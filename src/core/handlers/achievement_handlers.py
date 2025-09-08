@@ -52,10 +52,10 @@ class AchievementHandlers:
             await query.edit_message_text("❌ Error loading achievements.")
     
     async def _handle_individual_achievements_menu(self, query, context):
-        """Handle individual mode achievements menu."""
+        """Handle individual mode achievements menu with comprehensive stats."""
         user_id = query.from_user.id
         
-        # Get user stats and recent achievements (all achievements)
+        # Get user stats and recent achievements
         stats = self.achievement_service.get_user_stats(user_id)
         recent_achievements = self.achievement_service.get_user_achievements(user_id, 5)
         
@@ -63,33 +63,84 @@ class AchievementHandlers:
             await query.edit_message_text("❌ Unable to load your achievements.")
             return
         
-        # Create individual achievements display
-        display = "🏆 Individual Achievements\n"
-        display += "📚 All your reading accomplishments\n\n"
+        # Create comprehensive display with attractive formatting
+        display = "🏆 <b>Your Reading Journey</b>\n"
+        display += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         
-        # Stats overview
-        display += self.visual_service.create_streak_display(stats.current_streak, stats.longest_streak)
-        display += f"\n{self.visual_service.create_level_display(stats.level, stats.xp)}"
-        display += f"\n📚 Books: {stats.books_completed} | 📄 Pages: {stats.total_pages_read:,}"
-        display += f"\n🏆 Total Achievements: {stats.total_achievements}\n"
+        # Level and XP Section
+        next_level_xp = stats.level * 1000
+        current_level_xp = (stats.level - 1) * 1000
+        progress_xp = stats.xp - current_level_xp
+        needed_xp = next_level_xp - current_level_xp
+        level_progress = (progress_xp / needed_xp) * 100 if needed_xp > 0 else 0
         
-        # Recent achievements
-        if recent_achievements:
-            display += "\n🎉 Recent Achievements:\n"
-            for achievement in recent_achievements:
-                display += f"• {self.visual_service.create_achievement_badge(achievement)}\n"
+        # Inline level progress bar (width 8, no percentage in bar)
+        level_bar = self.visual_service.create_progress_bar(progress_xp, needed_xp, 8, False)
+        display += f"⭐ <b>Level {stats.level}</b> {level_bar} ({stats.xp:,} XP)\n"
+        display += f"📊 Progress to Level {stats.level + 1}: {level_progress:.1f}%\n"
+        display += f"🎯 XP needed: {needed_xp - progress_xp:,}\n\n"
+        
+        # Streak Section
+        if stats.current_streak > 0:
+            fire_emoji = "🔥" if stats.current_streak < 7 else "🔥🔥" if stats.current_streak < 30 else "🔥🔥🔥"
+            display += f"{fire_emoji} <b>Current Streak:</b> {stats.current_streak} days\n"
+            if stats.longest_streak > stats.current_streak:
+                display += f"🏆 <b>Best Streak:</b> {stats.longest_streak} days\n"
+            if stats.streak_start_date:
+                display += f"📅 <b>Started:</b> {stats.streak_start_date.strftime('%Y-%m-%d')}\n"
         else:
-            display += "\n📖 Start reading to earn your first achievement!"
+            # Show zero-day streak explicitly when there is no active streak
+            display += "🔥 <b>Current Streak:</b> 0 days\n"
+        display += "\n"
+        
+        # Reading Statistics Section
+        display += "📚 <b>Reading Statistics</b>\n"
+        display += f"📖 <b>Books Completed:</b> {stats.books_completed}\n"
+        display += f"📄 <b>Total Pages:</b> {stats.total_pages_read:,}\n"
+        display += f"🏆 <b>Achievements:</b> {stats.total_achievements}\n"
+        
+        # Reading Level Section
+        from src.services.profile_service import ProfileService
+        profile_service = ProfileService(self.achievement_service.db_manager, self.achievement_service)
+        profile = profile_service.get_user_profile(user_id)
+        
+        # Ensure reading level is set, auto-assign if None
+        reading_level = profile.reading_level if profile and profile.reading_level else "Beginner"
+        if not profile or not profile.reading_level:
+            # Auto-assign reading level if not set
+            reading_level = profile_service._auto_assign_reading_level(user_id)
+        
+        display += f"📚 <b>Reading Level:</b> {reading_level}\n"
+        
+        # Calculate averages
+        if stats.books_completed > 0:
+            avg_pages_per_book = stats.total_pages_read / stats.books_completed
+            display += f"📊 <b>Avg Pages/Book:</b> {avg_pages_per_book:.1f}\n"
+        
+        if stats.total_achievements > 0:
+            avg_xp_per_achievement = stats.xp / stats.total_achievements
+            display += f"⭐ <b>Avg XP/Achievement:</b> {avg_xp_per_achievement:.1f}\n"
+        
+        if stats.last_reading_date:
+            display += f"📅 <b>Last Reading:</b> {stats.last_reading_date.strftime('%Y-%m-%d')}\n"
+        display += "\n"
+        
+        # Recent Achievements Section
+        if recent_achievements:
+            display += "🎉 <b>Recent Achievements</b>\n"
+            for i, achievement in enumerate(recent_achievements, 1):
+                display += f"{i}. {self.visual_service.create_achievement_badge(achievement)}\n"
+        else:
+            display += "📖 <b>Start reading to earn your first achievement!</b>\n"
         
         # Create keyboard for individual mode
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 Detailed Stats", callback_data="achievement_stats")],
-            [InlineKeyboardButton("🎯 All Achievements", callback_data="achievement_list")],
-            [InlineKeyboardButton("💬 Motivation Messages", callback_data="motivation_messages")],
+            [InlineKeyboardButton("🎯 All Achievements", callback_data="achievement_list"), InlineKeyboardButton("💌 Reading Messages", callback_data="motivation_messages")],
+            [InlineKeyboardButton("👤 Profile", callback_data="view_profile")],
             [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")]
         ])
         
-        await query.edit_message_text(display, reply_markup=keyboard)
+        await query.edit_message_text(display, reply_markup=keyboard, parse_mode='HTML')
     
     async def _handle_community_achievements_menu(self, query, context, league_id=None):
         """Handle community mode achievements menu."""
@@ -183,48 +234,6 @@ class AchievementHandlers:
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
-    async def handle_achievement_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle detailed achievement stats display."""
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            
-            # Get comprehensive stats
-            stats = self.achievement_service.get_user_stats(user_id)
-            if not stats:
-                await query.edit_message_text("❌ Unable to load your stats.")
-                return
-            
-            # Create detailed stats display
-            display = self.visual_service.create_reading_stats_display(user_id)
-            
-            # Add additional details
-            display += f"\n\n📈 Detailed Statistics:\n"
-            display += f"📅 Last Reading: {stats.last_reading_date.strftime('%Y-%m-%d') if stats.last_reading_date else 'Never'}\n"
-            display += f"🎯 Current Streak Started: {stats.streak_start_date.strftime('%Y-%m-%d') if stats.streak_start_date else 'N/A'}\n"
-            
-            # Calculate averages
-            if stats.books_completed > 0:
-                avg_pages_per_book = stats.total_pages_read / stats.books_completed
-                display += f"📊 Average Pages per Book: {avg_pages_per_book:.1f}\n"
-            
-            if stats.total_achievements > 0:
-                avg_xp_per_achievement = stats.xp / stats.total_achievements
-                display += f"⭐ Average XP per Achievement: {avg_xp_per_achievement:.1f}\n"
-            
-            # Create keyboard
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 Weekly Summary", callback_data="weekly_summary")],
-                [InlineKeyboardButton("🏆 Back to Achievements", callback_data="achievement_menu")]
-            ])
-            
-            await query.edit_message_text(display, reply_markup=keyboard)
-            
-        except Exception as e:
-            self.logger.error(f"Failed to handle achievement stats: {e}")
-            await query.edit_message_text("❌ Error loading detailed stats.")
     
     async def handle_achievement_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle all achievements list display."""
@@ -260,35 +269,83 @@ class AchievementHandlers:
             await query.edit_message_text("❌ Error loading achievements list.")
     
     async def handle_motivation_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle motivation messages display."""
+        """Handle motivation messages display with pagination and attractive UI."""
         try:
             query = update.callback_query
             await query.answer()
             
             user_id = query.from_user.id
+            page = 0
             
-            # Get motivation messages
-            messages = self.motivation_service.get_user_messages(user_id, 10)
+            # Check if this is a pagination request
+            if query.data.startswith("messages_page_"):
+                page = int(query.data.split("_")[-1])
+            
+            # Get motivation messages with pagination (4 per page for better readability)
+            messages_per_page = 4
+            offset = page * messages_per_page
+            messages = self.motivation_service.get_user_messages(user_id, messages_per_page, offset)
             unread_count = self.motivation_service.get_unread_message_count(user_id)
+            total_messages = self.motivation_service.get_total_message_count(user_id)
             
             if not messages:
-                display = "💬 No motivation messages yet!\n\n"
-                display += "📖 Start reading to receive personalized motivation messages!"
+                display = "💌 <b>Your Reading Messages</b>\n"
+                display += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                display += "📖 <i>No messages yet!</i>\n\n"
+                display += "🌟 Start reading to receive personalized motivation messages, achievement celebrations, and reading tips!"
             else:
-                display = f"💬 Motivation Messages ({unread_count} unread)\n\n"
+                display = "💌 <b>Your Reading Messages</b>\n"
+                display += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                
+                if unread_count > 0:
+                    display += f"🔴 <b>{unread_count} unread message{'s' if unread_count != 1 else ''}</b>\n\n"
                 
                 for i, message in enumerate(messages, 1):
-                    status = "🔴" if not message.is_read else "✅"
-                    display += f"{status} {message.content}\n"
-                    display += f"   📅 {message.sent_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+                    # Visual separator between messages
+                    display += "────────────────────────────────\n"
+
+                    # Message status and styling
+                    if not message.is_read:
+                        display += f"🔴 <b>Message {i}</b>\n"
+                        display += f"💬 {message.content}\n"
+                    else:
+                        display += f"✅ <b>Message {i}</b>\n"
+                        display += f"💬 <i>{message.content}</i>\n"
+                    
+                    # Date formatting
+                    date_str = message.sent_at.strftime('%Y-%m-%d')
+                    time_str = message.sent_at.strftime('%H:%M')
+                    display += f"📅 <i>{date_str} at {time_str}</i>\n"
+
+                # Closing separator for the last message block
+                display += "────────────────────────────────\n\n"
+                
+                # Add page info with better formatting
+                total_pages = (total_messages + messages_per_page - 1) // messages_per_page
+                display += f"📄 <b>Page {page + 1} of {total_pages}</b> • {total_messages} total messages"
             
-            # Create keyboard
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📬 Mark All as Read", callback_data="mark_messages_read")],
-                [InlineKeyboardButton("🏆 Back to Achievements", callback_data="achievement_menu")]
-            ])
+            # Create keyboard with pagination
+            keyboard_buttons = []
             
-            await query.edit_message_text(display, reply_markup=keyboard)
+            # Pagination buttons
+            if total_messages > messages_per_page:
+                nav_buttons = []
+                if page > 0:
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"messages_page_{page-1}"))
+                if page < total_pages - 1:
+                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"messages_page_{page+1}"))
+                if nav_buttons:
+                    keyboard_buttons.append(nav_buttons)
+            
+            # Action buttons
+            if messages and unread_count > 0:
+                keyboard_buttons.append([InlineKeyboardButton("📬 Mark All as Read", callback_data="mark_messages_read")])
+            
+            keyboard_buttons.append([InlineKeyboardButton("🏆 Back to Achievements", callback_data="achievement_menu")])
+            
+            keyboard = InlineKeyboardMarkup(keyboard_buttons)
+            
+            await query.edit_message_text(display, reply_markup=keyboard, parse_mode='HTML')
             
         except Exception as e:
             self.logger.error(f"Failed to handle motivation messages: {e}")

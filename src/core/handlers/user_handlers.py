@@ -42,7 +42,7 @@ class UserHandlers:
         try:
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute("SELECT full_name, username FROM users WHERE user_id = ?", (user_id,))
+                cur.execute("SELECT full_name, nickname FROM users WHERE user_id = ?", (user_id,))
                 row = cur.fetchone()
                 if row:
                     full_name_db = row[0]
@@ -53,13 +53,10 @@ class UserHandlers:
             display_name = nickname_db or full_name_db
             greet = f"Welcome back, {display_name}!"
             await update.message.reply_text(greet)
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🆕 Individual Mode", callback_data="mode_individual"),
-                    InlineKeyboardButton("👥 Community Mode", callback_data="mode_community"),
-                ]
-            ])
-            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=keyboard)
+            
+            # Import the global keyboard from bot.py
+            from src.core.bot import GLOBAL_MODE_KEYBOARD
+            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)
             return
         # New user: begin minimal registration
         await update.message.reply_text(WELCOME_MESSAGE)
@@ -68,6 +65,18 @@ class UserHandlers:
     
     async def handle_registration_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Unified registration handler for name and nickname steps."""
+        # Handle profile editing flow
+        if context.user_data.get('editing_field'):
+            from src.core.handlers.profile_handlers import ProfileHandlers
+            from src.services.profile_service import ProfileService
+            from src.services.achievement_service import AchievementService
+            
+            achievement_service = AchievementService()
+            profile_service = ProfileService(achievement_service.db_manager, achievement_service)
+            profile_handlers = ProfileHandlers(profile_service)
+            await profile_handlers.handle_edit_text_input(update, context)
+            return
+        
         # Handle admin book addition flow
         if context.user_data.get('adding_book'):
             from src.core.handlers.admin_handlers import AdminHandlers
@@ -90,7 +99,7 @@ class UserHandlers:
             context.user_data.pop('awaiting_reminder_time', None)
             pretty = self.reminder_service.format_time_12h(t)
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="mode_individual")]])
-            await update.message.reply_text(f"✅ Reminder set for {pretty} (Ethiopia time).", reply_markup=kb)
+            await update.message.reply_text(f"✅ Reminder set for {pretty}.", reply_markup=kb)
             return
         
         # Handle community reminder custom time entry
@@ -109,8 +118,8 @@ class UserHandlers:
                     league_name = league.name if league else f"League {league_id}"
                     
                     pretty = self.reminder_service.format_time_12h(t)
-                    message = f"✅ <b>Community Reminder Set!</b>\n\n"
-                    message += f"⏰ <b>Time:</b> {pretty} (Ethiopia time)\n"
+                    message = "✅ <b>Community Reminder Set!</b>\n\n"
+                    message += f"⏰ <b>Time:</b> {pretty}\n"
                     message += f"📚 <b>League:</b> {league_name}\n"
                     message += f"🎯 <b>Daily Goal:</b> {league.daily_goal if league else 'N/A'} pages\n\n"
                     message += "You'll receive daily reminders to read your league book!"
@@ -211,21 +220,33 @@ class UserHandlers:
             nickname = update.message.text.strip()
             if nickname == '-':
                 nickname = ''
+            context.user_data['reg_nickname'] = nickname
+            context.user_data['reg_step'] = 'phone'
+            await update.message.reply_text("What's your phone number? (e.g., +1234567890 or 1234567890)")
+            return
+        if step == 'phone':
+            phone = update.message.text.strip()
+            # Basic phone number validation
+            if phone and not phone.replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '').isdigit():
+                await update.message.reply_text("Please enter a valid phone number (e.g., +1234567890 or 1234567890)")
+                return
             try:
                 with db_manager.get_connection() as conn:
                     cur = conn.cursor()
                     cur.execute(
                         """
-                        INSERT INTO users (user_id, username, full_name, city, contact)
-                        VALUES (?, ?, ?, '', '')
+                        INSERT INTO users (user_id, full_name, nickname, city, contact)
+                        VALUES (?, ?, ?, '', ?)
                         ON CONFLICT(user_id) DO UPDATE SET
-                            username = excluded.username,
-                            full_name = excluded.full_name
+                            full_name = excluded.full_name,
+                            nickname = excluded.nickname,
+                            contact = excluded.contact
                         """,
                         (
                             update.effective_user.id,
-                            nickname or (update.effective_user.username or ''),
                             context.user_data.get('reg_name', ''),
+                            context.user_data.get('reg_nickname', '') or (update.effective_user.username or ''),
+                            phone,
                         ),
                     )
                     conn.commit()
@@ -254,26 +275,90 @@ class UserHandlers:
             await self._show_community_menu(query)
     
     async def _show_mode_menu(self, update: Update):
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🆕 Individual Mode", callback_data="mode_individual"),
-                InlineKeyboardButton("👥 Community Mode", callback_data="mode_community"),
-            ]
-        ])
+        # Import the global keyboard from bot.py
+        from src.core.bot import GLOBAL_MODE_KEYBOARD
         if update.message:
-            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=keyboard)
+            await update.message.reply_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)
         else:
-            await update.edit_message_text(MODE_SELECTION_MESSAGE, reply_markup=keyboard)  # type: ignore
+            await update.edit_message_text(MODE_SELECTION_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)  # type: ignore
     
     async def _show_individual_menu(self, query):
         goal = self.book_service.get_user_daily_goal(query.from_user.id)
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📚 My Books", callback_data="ind_my_books"), InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book")],
+            [InlineKeyboardButton("📚 Books", callback_data="ind_books_menu"), InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book")],
             [InlineKeyboardButton("📖 Update Progress", callback_data="ind_progress")],
             [InlineKeyboardButton(f"🎯 Daily Goal: {goal}p", callback_data="ind_set_goal"), InlineKeyboardButton("⏰ Reminders", callback_data="ind_reminder")],
-            [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
+            [InlineKeyboardButton("📊 Stats & Achievements", callback_data="achievement_menu")],
         ])
         await query.edit_message_text("Individual Mode — choose an option:", reply_markup=keyboard)
+    
+    async def _show_books_menu(self, query):
+        """Show books submenu with My Books and Featured Books options."""
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📖 My Books", callback_data="ind_my_books"), InlineKeyboardButton("⭐ Featured Books", callback_data="ind_featured_books")],
+            [InlineKeyboardButton("⬅️ Back to Individual Menu", callback_data="mode_individual")]
+        ])
+        await query.edit_message_text("📚 <b>Books</b> — choose an option:", reply_markup=keyboard, parse_mode='HTML')
+    
+    async def _show_featured_books(self, query, page=0):
+        """Show featured books that users can start reading with pagination."""
+        try:
+            books = self.book_service.get_featured_books()
+            if not books:
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back to Books Menu", callback_data="ind_books_menu")]
+                ])
+                await query.edit_message_text(
+                    "⭐ <b>Featured Books</b>\n\n"
+                    "No featured books available right now. Check back later!",
+                    reply_markup=keyboard,
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Pagination settings
+            books_per_page = 5
+            total_books = len(books)
+            total_pages = (total_books + books_per_page - 1) // books_per_page
+            start_idx = page * books_per_page
+            end_idx = min(start_idx + books_per_page, total_books)
+            page_books = books[start_idx:end_idx]
+            
+            # Create keyboard with books
+            keyboard = []
+            for book in page_books:
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📖 {book['title']} - {book['author']} ({book['total_pages']}p)",
+                        callback_data=f"book_start_{book['book_id']}"
+                    )
+                ])
+            
+            # Add pagination controls
+            pagination_buttons = []
+            if page > 0:
+                pagination_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"featured_books_page_{page-1}"))
+            if page < total_pages - 1:
+                pagination_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"featured_books_page_{page+1}"))
+            
+            if pagination_buttons:
+                keyboard.append(pagination_buttons)
+            
+            # Add back button
+            keyboard.append([InlineKeyboardButton("⬅️ Back to Books Menu", callback_data="ind_books_menu")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            page_info = f" (Page {page + 1}/{total_pages})" if total_pages > 1 else ""
+            await query.edit_message_text(
+                f"⭐ <b>Featured Books</b>{page_info}\n\n"
+                "Tap on a book to start reading:",
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Failed to show featured books: {e}")
+            await query.edit_message_text("❌ Error loading featured books. Please try again.")
     
     async def _show_community_menu(self, query):
         keyboard = InlineKeyboardMarkup([
@@ -288,8 +373,15 @@ class UserHandlers:
         q = update.callback_query
         await q.answer()
         action = q.data
-        if action == 'ind_my_books':
+        if action == 'ind_books_menu':
+            await self._show_books_menu(q)
+        elif action == 'ind_my_books':
             await self._show_my_books(q, context, page=0)
+        elif action == 'ind_featured_books':
+            await self._show_featured_books(q)
+        elif action.startswith('featured_books_page_'):
+            page = int(action.split('_')[-1])
+            await self._show_featured_books(q, page)
         elif action == 'ind_add_book':
             context.user_data['add_book'] = {}
             context.user_data['add_book_step'] = 'title'
@@ -300,11 +392,6 @@ class UserHandlers:
             d = Dummy(); d.message = q.message  # type: ignore
             d.effective_user = q.from_user  # type: ignore
             await self.progress_command(d, context)
-        elif action == 'ind_stats':
-            class Dummy: pass
-            d = Dummy(); d.message = q.message  # type: ignore
-            d.effective_user = q.from_user  # type: ignore
-            await self.stats_command(d, context)
         elif action == 'ind_reminder':
             class Dummy: pass
             d = Dummy(); d.message = q.message  # type: ignore
@@ -438,7 +525,7 @@ class UserHandlers:
                         league_books = [book]
                     else:
                         await query.edit_message_text(
-                            f"❌ Error: League book not found.",
+                            "❌ Error: League book not found.",
                             reply_markup=InlineKeyboardMarkup([[
                                 InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
                             ]])
@@ -446,7 +533,7 @@ class UserHandlers:
                         return
                 else:
                     await query.edit_message_text(
-                        f"❌ Error: Could not start reading the league book.",
+                        "❌ Error: Could not start reading the league book.",
                         reply_markup=InlineKeyboardMarkup([[
                             InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
                         ]])
@@ -455,7 +542,7 @@ class UserHandlers:
             
             if not league_books:
                 await query.edit_message_text(
-                    f"❌ Error: Could not load league book information.",
+                    "❌ Error: Could not load league book information.",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
                     ]])
@@ -628,7 +715,7 @@ class UserHandlers:
                 league_name = league.name if league else f"League {league_id}"
                 
                 message = f"✅ <b>Reminder Set!</b>\n\n"
-                message += f"⏰ <b>Time:</b> {hour:02d}:{minute:02d} (Ethiopia time)\n"
+                message += f"⏰ <b>Time:</b> {hour:02d}:{minute:02d} \n"
                 message += f"📚 <b>League:</b> {league_name}\n"
                 message += f"🎯 <b>Daily Goal:</b> {league.daily_goal if league else 'N/A'} pages\n\n"
                 message += "You'll receive daily reminders to read your league book!"
@@ -669,8 +756,7 @@ class UserHandlers:
             message = f"⏰ <b>Custom Reminder Time for {league_name}</b>\n\n"
             message += "Please enter your preferred reminder time in one of these formats:\n\n"
             message += "• <b>24-hour format:</b> 14:30 (2:30 PM)\n"
-            message += "• <b>12-hour format:</b> 2:30 PM or 2:30pm\n\n"
-            message += "⏰ <b>Note:</b> All times are in Ethiopia time (GMT+3)"
+            message += "• <b>12-hour format:</b> 2:30 PM or 2:30pm"
             
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Back to Reminders", callback_data="com_reminder")]
@@ -776,7 +862,8 @@ class UserHandlers:
             await query.edit_message_text("❌ Error loading community statistics.")
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(HELP_MESSAGE)
+        from src.core.bot import GLOBAL_MODE_KEYBOARD
+        await update.message.reply_text(HELP_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)
     
     async def books_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         books = self.book_service.get_featured_books()
@@ -857,7 +944,7 @@ class UserHandlers:
                 return
             self.reminder_service.set_reminder(q.from_user.id, t, "daily")
             pretty = self.reminder_service.format_time_12h(t)
-            await q.edit_message_text(f"✅ Reminder set for {pretty} (Ethiopia time).")
+            await q.edit_message_text(f"✅ Reminder set for {pretty}.")
             return
         if data == 'rem_disable':
             ok = self.reminder_service.remove_reminder(q.from_user.id)
@@ -879,7 +966,7 @@ class UserHandlers:
             return
         self.reminder_service.set_reminder(update.effective_user.id, t, "daily")
         pretty = self.reminder_service.format_time_12h(t)
-        await update.message.reply_text(f"✅ Reminder set for {pretty} (Ethiopia time).")
+        await update.message.reply_text(f"✅ Reminder set for {pretty}very it .")
     
     async def reminder_view(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         r = self.reminder_service.get_reminder(update.effective_user.id)

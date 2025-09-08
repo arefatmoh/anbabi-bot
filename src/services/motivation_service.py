@@ -24,8 +24,45 @@ class MotivationService:
         self.db_manager = db_manager
         self.achievement_service = AchievementService()
     
+    def _next_challenge_hint(self, achievement_type: str, metadata: Dict[str, Any] = None) -> Optional[str]:
+        """Return a short hint describing the next harder challenge."""
+        try:
+            if achievement_type.endswith('_day_streak'):
+                current = int((metadata or {}).get('streak', 0))
+                milestones = [1, 3, 7, 14, 21, 30, 50, 75, 100, 150, 200, 250, 300, 365]
+                future = next((m for m in milestones if m > current), None)
+                if future:
+                    return f"Next: maintain your streak to reach <b>{future} days</b>."
+            if achievement_type.endswith('_pages') and not achievement_type.startswith('league_'):
+                current = int((metadata or {}).get('pages', 0))
+                milestones = [100, 200, 300, 500, 750, 1000, 1500, 3000, 5000, 10000]
+                future = next((m for m in milestones if m > current), None)
+                if future:
+                    return f"Next: read a total of <b>{future:,}</b> pages."
+            if achievement_type.startswith('league_') and achievement_type.endswith('_pages'):
+                current = int((metadata or {}).get('pages', 0))
+                milestones = [100, 300, 500, 750, 1000, 2000, 3000, 5000]
+                future = next((m for m in milestones if m > current), None)
+                if future:
+                    return f"Next in this league: reach <b>{future:,}</b> pages."
+            if achievement_type in ('first_book', '5_books', '10_books', '25_books', '50_books'):
+                order = ['first_book', '5_books', '10_books', '25_books', '50_books']
+                names = {
+                    'first_book': '5 books',
+                    '5_books': '10 books',
+                    '10_books': '25 books',
+                    '25_books': '50 books'
+                }
+                idx = order.index(achievement_type)
+                if idx < len(order) - 1:
+                    nxt = order[idx + 1]
+                    return f"Next: complete <b>{names[achievement_type]}</b>."
+        except Exception:
+            return None
+        return None
+
     def send_achievement_celebration(self, user_id: int, achievement: 'Achievement') -> Optional[str]:
-        """Send enhanced celebration message for a new achievement."""
+        """Send enhanced celebration message for a new achievement with next-challenge hint and rich formatting."""
         try:
             # Get achievement level for enhanced messaging
             achievement_level = achievement.metadata.get('level', 'Bronze') if achievement.metadata else 'Bronze'
@@ -77,7 +114,7 @@ class MotivationService:
             # Add XP reward information
             if achievement.metadata and 'xp_reward' in achievement.metadata:
                 xp_reward = achievement.metadata['xp_reward']
-                message_content += f"\n\n✨ +{xp_reward} XP earned!"
+                message_content += f"\n\n<b>✨ +{xp_reward} XP</b> earned!"
                 
                 # Add level progression hint
                 if xp_reward >= 500:
@@ -85,7 +122,9 @@ class MotivationService:
                 elif xp_reward >= 200:
                     message_content += f"\n📈 Great XP gain! Keep up the excellent work!"
             
-            # Add streak information for streak achievements
+            # Add achievement description and streak info
+            if achievement.description:
+                message_content += f"\n\n<i>{achievement.description}</i>"
             if 'streak' in achievement.type:
                 streak_days = achievement.metadata.get('streak', 0) if achievement.metadata else 0
                 if streak_days >= 100:
@@ -94,6 +133,11 @@ class MotivationService:
                     message_content += f"\n💪 {streak_days} days strong! Amazing consistency!"
                 elif streak_days >= 7:
                     message_content += f"\n🌟 {streak_days} days in a row! Building great habits!"
+
+            # Add next challenge hint
+            hint = self._next_challenge_hint(achievement.type, achievement.metadata or {})
+            if hint:
+                message_content += f"\n\n<u>{hint}</u>"
             
             # Store the message in database
             self._create_motivation_message(
@@ -299,8 +343,8 @@ class MotivationService:
             self.logger.error(f"Failed to create motivation message for user {user_id}: {e}")
             return False
     
-    def get_user_messages(self, user_id: int, limit: int = 10, unread_only: bool = False) -> List[MotivationMessage]:
-        """Get user's motivation messages."""
+    def get_user_messages(self, user_id: int, limit: int = 10, offset: int = 0, unread_only: bool = False) -> List[MotivationMessage]:
+        """Get user's motivation messages with pagination."""
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
@@ -314,8 +358,8 @@ class MotivationService:
                 if unread_only:
                     query += ' AND is_read = 0'
                 
-                query += ' ORDER BY sent_at DESC LIMIT ?'
-                params.append(limit)
+                query += ' ORDER BY sent_at DESC LIMIT ? OFFSET ?'
+                params.extend([limit, offset])
                 
                 cursor.execute(query, params)
                 
@@ -328,6 +372,23 @@ class MotivationService:
         except Exception as e:
             self.logger.error(f"Failed to get messages for user {user_id}: {e}")
             return []
+    
+    def get_total_message_count(self, user_id: int) -> int:
+        """Get total count of user's motivation messages."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT COUNT(*) FROM motivation_messages 
+                    WHERE user_id = ?
+                ''', (user_id,))
+                
+                return cursor.fetchone()[0]
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get total message count for user {user_id}: {e}")
+            return 0
     
     def mark_message_as_read(self, message_id: int) -> bool:
         """Mark a motivation message as read."""

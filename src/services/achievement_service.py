@@ -278,16 +278,24 @@ class AchievementService:
     def _check_page_achievements(self, user_id: int, total_pages: int) -> List[Achievement]:
         """Check for page-based achievements."""
         achievements = []
-        page_milestones = [100, 500, 1000, 5000]
+        # Expanded overall page milestones
+        page_milestones = [100, 200, 300, 500, 750, 1000, 1500, 3000, 5000, 10000]
         
         for milestone in page_milestones:
             if total_pages >= milestone:
                 achievement_type = f"{milestone}_pages"
                 if not self._has_achievement(user_id, achievement_type):
+                    # Prefer definition data if present
+                    definition = self._get_achievement_definition(achievement_type)
+                    title = definition.title if definition else '📄 Pages Milestone'
+                    description = definition.description if definition else f'Read {milestone} pages'
+                    xp_reward = definition.xp_reward if definition else max(50, milestone // 10)
                     achievement = self._create_achievement(
-                        user_id, achievement_type, f'📄 Page Reader',
-                        f'Read {milestone} pages',
-                        {'pages': milestone, 'xp_reward': milestone // 10}
+                        user_id,
+                        achievement_type,
+                        title,
+                        description,
+                        {'pages': milestone, 'xp_reward': xp_reward}
                     )
                     if achievement:
                         achievements.append(achievement)
@@ -504,6 +512,23 @@ class AchievementService:
             self.logger.error(f"Failed to get achievements for user {user_id}: {e}")
             return []
     
+    def get_user_achievement_count(self, user_id: int) -> int:
+        """Get total count of user's achievements."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT COUNT(*) FROM achievements 
+                    WHERE user_id = ?
+                ''', (user_id,))
+                
+                result = cursor.fetchone()
+                return result[0] if result else 0
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get achievement count for user {user_id}: {e}")
+            return 0
+    
     def get_achievement_definitions(self) -> List[AchievementDefinition]:
         """Get all achievement definitions."""
         try:
@@ -651,16 +676,22 @@ class AchievementService:
         if league_stats:
             league_pages = league_stats.get('pages_read', 0)
             
-            # League page milestones
-            league_milestones = [100, 500, 1000, 2000]
+            # Expanded league page milestones
+            league_milestones = [100, 300, 500, 750, 1000, 2000, 3000, 5000]
             for milestone in league_milestones:
                 if league_pages >= milestone:
                     achievement_type = f"league_{milestone}_pages"
                     if not self._has_achievement(user_id, achievement_type):
+                        definition = self._get_achievement_definition(achievement_type)
+                        title = definition.title if definition else f'🏆 League {milestone} Pages'
+                        description = definition.description if definition else f'Read {milestone} pages in this league'
+                        xp_reward = definition.xp_reward if definition else max(20, milestone // 5)
                         achievement = self._create_achievement(
-                            user_id, achievement_type, f'🏆 League {milestone} Pages',
-                            f'Read {milestone} pages in this league',
-                            {'league_id': league_id, 'pages': milestone, 'xp_reward': milestone // 5}
+                            user_id,
+                            achievement_type,
+                            title,
+                            description,
+                            {'league_id': league_id, 'pages': milestone, 'xp_reward': xp_reward}
                         )
                         if achievement:
                             achievements.append(achievement)

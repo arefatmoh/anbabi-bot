@@ -58,8 +58,8 @@ class DatabaseManager:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
-                username TEXT,
                 full_name TEXT NOT NULL,
+                nickname TEXT,
                 city TEXT NOT NULL,
                 contact TEXT,
                 reading_mode TEXT DEFAULT 'individual',
@@ -70,7 +70,16 @@ class DatabaseManager:
                 last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_active BOOLEAN DEFAULT 1,
                 is_admin BOOLEAN DEFAULT 0,
-                is_banned BOOLEAN DEFAULT 0
+                is_banned BOOLEAN DEFAULT 0,
+                -- Extended profile fields
+                bio TEXT,
+                reading_goal_pages_per_day INTEGER DEFAULT 20,
+                preferred_reading_time TEXT,
+                favorite_genres TEXT,
+                reading_level TEXT,
+                privacy_level TEXT DEFAULT 'public',
+                show_achievements BOOLEAN DEFAULT 1,
+                show_reading_stats BOOLEAN DEFAULT 1
             )
         ''')
         
@@ -98,6 +107,7 @@ class DatabaseManager:
                 name TEXT NOT NULL,
                 description TEXT,
                 admin_id INTEGER NOT NULL,
+                created_by INTEGER,
                 current_book_id INTEGER,
                 start_date DATE,
                 end_date DATE,
@@ -106,9 +116,19 @@ class DatabaseManager:
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (admin_id) REFERENCES users (user_id),
+                FOREIGN KEY (created_by) REFERENCES users (user_id),
                 FOREIGN KEY (current_book_id) REFERENCES books (book_id)
             )
         ''')
+
+        # Backfill missing columns for existing databases
+        try:
+            cursor.execute("PRAGMA table_info(leagues)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            if 'created_by' not in existing_cols:
+                cursor.execute('ALTER TABLE leagues ADD COLUMN created_by INTEGER')
+        except Exception:
+            pass
         
         # League members table
         cursor.execute('''
@@ -235,6 +255,26 @@ class DatabaseManager:
             )
         ''')
         
+        # User profiles table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id INTEGER PRIMARY KEY,
+                display_name TEXT,
+                nickname TEXT,
+                bio TEXT,
+                reading_goal_pages_per_day INTEGER DEFAULT 20,
+                preferred_reading_time TEXT,
+                favorite_genres TEXT,
+                reading_level TEXT,
+                privacy_level TEXT DEFAULT 'public',
+                show_achievements BOOLEAN DEFAULT 1,
+                show_reading_stats BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+        
         # Reminders table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reminders (
@@ -260,6 +300,53 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_motivation_messages_user ON motivation_messages(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_visual_elements_user ON visual_elements(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_achievement_definitions_type ON achievement_definitions(type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_profiles_user ON user_profiles(user_id)')
+        
+        # Migrate data from user_profiles to users table if needed
+        self._migrate_user_profiles_to_users(cursor)
+    
+    def _migrate_user_profiles_to_users(self, cursor: sqlite3.Cursor):
+        """Migrate data from user_profiles table to users table."""
+        try:
+            # Check if user_profiles table exists and has data
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_profiles'")
+            if not cursor.fetchone():
+                return  # No user_profiles table to migrate from
+            
+            # Check if users table already has the new columns
+            cursor.execute("PRAGMA table_info(users)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'bio' not in columns:
+                # Add the new columns to users table (simplified - no display_name/username)
+                cursor.execute('ALTER TABLE users ADD COLUMN bio TEXT')
+                cursor.execute('ALTER TABLE users ADD COLUMN reading_goal_pages_per_day INTEGER DEFAULT 20')
+                cursor.execute('ALTER TABLE users ADD COLUMN preferred_reading_time TEXT')
+                cursor.execute('ALTER TABLE users ADD COLUMN favorite_genres TEXT')
+                cursor.execute('ALTER TABLE users ADD COLUMN reading_level TEXT')
+                cursor.execute('ALTER TABLE users ADD COLUMN privacy_level TEXT DEFAULT "public"')
+                cursor.execute('ALTER TABLE users ADD COLUMN show_achievements BOOLEAN DEFAULT 1')
+                cursor.execute('ALTER TABLE users ADD COLUMN show_reading_stats BOOLEAN DEFAULT 1')
+            
+            # Migrate data from user_profiles to users (simplified fields)
+            cursor.execute('''
+                UPDATE users SET
+                    nickname = COALESCE((SELECT nickname FROM user_profiles WHERE user_profiles.user_id = users.user_id), users.nickname),
+                    bio = (SELECT bio FROM user_profiles WHERE user_profiles.user_id = users.user_id),
+                    reading_goal_pages_per_day = COALESCE((SELECT reading_goal_pages_per_day FROM user_profiles WHERE user_profiles.user_id = users.user_id), users.daily_goal),
+                    preferred_reading_time = (SELECT preferred_reading_time FROM user_profiles WHERE user_profiles.user_id = users.user_id),
+                    favorite_genres = (SELECT favorite_genres FROM user_profiles WHERE user_profiles.user_id = users.user_id),
+                    reading_level = (SELECT reading_level FROM user_profiles WHERE user_profiles.user_id = users.user_id),
+                    privacy_level = COALESCE((SELECT privacy_level FROM user_profiles WHERE user_profiles.user_id = users.user_id), 'public'),
+                    show_achievements = COALESCE((SELECT show_achievements FROM user_profiles WHERE user_profiles.user_id = users.user_id), 1),
+                    show_reading_stats = COALESCE((SELECT show_reading_stats FROM user_profiles WHERE user_profiles.user_id = users.user_id), 1)
+                WHERE EXISTS (SELECT 1 FROM user_profiles WHERE user_profiles.user_id = users.user_id)
+            ''')
+            
+            self.logger.info("Successfully migrated user_profiles data to users table")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to migrate user_profiles data: {e}")
     
     def _insert_default_data(self, cursor: sqlite3.Cursor):
         """Insert default data into the database."""
@@ -353,8 +440,8 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 
                 # Get table counts
-                tables = ['users', 'books', 'leagues', 'user_books', 'reading_sessions', 'achievements', 
-                         'user_stats', 'motivation_messages', 'visual_elements', 'achievement_definitions']
+                tables = ['users', 'books', 'leagues', 'user_books', 'reading_sessions', 'achievements',
+                          'user_stats', 'motivation_messages', 'visual_elements', 'achievement_definitions', 'user_profiles']
                 table_counts = {}
                 
                 for table in tables:

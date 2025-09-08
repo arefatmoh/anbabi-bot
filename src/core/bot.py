@@ -6,7 +6,7 @@ This module contains the main bot class that orchestrates all functionality.
 
 import logging
 import re
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 from telegram.ext import Defaults
@@ -17,13 +17,20 @@ from src.core.handlers.admin_handlers import AdminHandlers
 from src.core.handlers.admin_league_handlers import AdminLeagueHandlers
 from src.core.handlers.conversation import ConversationHandlers
 from src.core.handlers.achievement_handlers import AchievementHandlers
+from src.core.handlers.profile_handlers import ProfileHandlers
 from src.services.book_service import BookService
 from src.services.reminder_service import ReminderService
 from src.services.achievement_service import AchievementService
 from src.services.motivation_service import MotivationService
 from src.services.visual_service import VisualService
 from src.services.scheduled_message_service import ScheduledMessageService
+from src.services.profile_service import ProfileService
 from src.services.factory import get_league_service
+
+# Global mode switch keyboard - always available
+GLOBAL_MODE_KEYBOARD = ReplyKeyboardMarkup([
+    [KeyboardButton("🏠 Individual Mode"), KeyboardButton("👥 Community Mode")]
+], resize_keyboard=True, is_persistent=True)
 
 
 class ReadingTrackerBot:
@@ -37,12 +44,14 @@ class ReadingTrackerBot:
         self.admin_league_handlers = None
         self.conversation_handlers = None
         self.achievement_handlers = None
+        self.profile_handlers = None
         self.book_service = BookService()
         self.reminder_service = ReminderService()
         self.achievement_service = AchievementService()
         self.motivation_service = MotivationService()
         self.visual_service = VisualService()
         self.scheduled_message_service = ScheduledMessageService()
+        self.profile_service = ProfileService(self.achievement_service.db_manager, self.achievement_service)
         self._init_handlers()
         self._init_application()
     
@@ -53,10 +62,63 @@ class ReadingTrackerBot:
             self.admin_league_handlers = AdminLeagueHandlers(get_league_service())
             self.conversation_handlers = ConversationHandlers()
             self.achievement_handlers = AchievementHandlers()
+            self.profile_handlers = ProfileHandlers(self.profile_service)
             self.logger.info("✅ All handlers initialized successfully")
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize handlers: {e}")
             raise
+    
+    async def _handle_global_mode_switch(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle global mode switch from reply keyboard buttons."""
+        try:
+            text = update.message.text
+            
+            # Clear any existing conversation state
+            context.user_data.clear()
+            
+            if text == "🏠 Individual Mode":
+                # Switch to individual mode
+                context.user_data.pop('current_league_id', None)
+                context.user_data.pop('community_mode', None)
+                await self._show_individual_menu_with_global_keyboard(update, context)
+                
+            elif text == "👥 Community Mode":
+                # Switch to community mode
+                context.user_data['community_mode'] = True
+                await self._show_community_menu_with_global_keyboard(update, context)
+                
+        except Exception as e:
+            self.logger.error(f"Failed to handle global mode switch: {e}")
+            await update.message.reply_text("❌ Error switching mode. Please try again.")
+    
+    async def _show_individual_menu_with_global_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show individual menu with global keyboard."""
+        try:
+            goal = self.book_service.get_user_daily_goal(update.effective_user.id)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📚 Books", callback_data="ind_books_menu"), InlineKeyboardButton("➕ Add My Book", callback_data="ind_add_book")],
+                [InlineKeyboardButton("📖 Update Progress", callback_data="ind_progress")],
+                [InlineKeyboardButton(f"🎯 Daily Goal: {goal}p", callback_data="ind_set_goal"), InlineKeyboardButton("⏰ Reminders", callback_data="ind_reminder")],
+                [InlineKeyboardButton("📊 Stats & Achievements", callback_data="achievement_menu")],
+            ])
+            await update.message.reply_text("🏠 <b>Individual Mode</b> — choose an option:", reply_markup=keyboard, parse_mode='HTML')
+        except Exception as e:
+            self.logger.error(f"Failed to show individual menu: {e}")
+            await update.message.reply_text("❌ Error loading individual menu. Please try again.")
+    
+    async def _show_community_menu_with_global_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show community menu with global keyboard."""
+        try:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse"), InlineKeyboardButton("👥 My Leagues", callback_data="com_my")],
+                [InlineKeyboardButton("📖 Update Progress", callback_data="com_progress"), InlineKeyboardButton("🏆 Leaderboard", callback_data="com_leaderboard")],
+                [InlineKeyboardButton("⏰ Reminders", callback_data="com_reminder"), InlineKeyboardButton("📊 My Stats", callback_data="com_stats")],
+                [InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
+            ])
+            await update.message.reply_text("👥 <b>Community Mode</b> — choose an option:", reply_markup=keyboard, parse_mode='HTML')
+        except Exception as e:
+            self.logger.error(f"Failed to show community menu: {e}")
+            await update.message.reply_text("❌ Error loading community menu. Please try again.")
     
     async def _handle_create_league_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle create_league command."""
@@ -99,6 +161,9 @@ class ReadingTrackerBot:
             # /start and registration first
             self.application.add_handler(CommandHandler('start', self.user_handlers.start))
             
+            # Global mode switch handler - MUST come before other text handlers
+            self.application.add_handler(MessageHandler(filters.Regex(re.compile(r"^(🏠 Individual Mode|👥 Community Mode)$")), self._handle_global_mode_switch))
+            
             # Progress numeric input - MUST come before general text handler
             self.application.add_handler(MessageHandler(filters.Regex(re.compile(r"^\d+$")), self._handle_progress_number))
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.user_handlers.handle_registration_text))
@@ -108,6 +173,7 @@ class ReadingTrackerBot:
             self.application.add_handler(CommandHandler('progress', self.user_handlers.progress_command))
             self.application.add_handler(CommandHandler('books', self.user_handlers.books_command))
             self.application.add_handler(CommandHandler('stats', self.user_handlers.stats_command))
+            self.application.add_handler(CommandHandler('profile', self.profile_handlers.handle_profile_command))
             self.application.add_handler(CommandHandler('league', self.user_handlers.league_command))
             self.application.add_handler(CommandHandler('leaderboard', self.user_handlers.league_handlers.handle_leaderboard_command))
             self.application.add_handler(CommandHandler('reminder', self.user_handlers.reminder_command))
@@ -130,7 +196,8 @@ class ReadingTrackerBot:
 
             # Mode selection and submenus
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_mode_callback, pattern="^mode_(individual|community)$"))
-            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^ind_(my_books|add_book|progress|stats|reminder|set_goal)$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^ind_(books_menu|my_books|featured_books|add_book|progress|stats|reminder|set_goal)$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^featured_books_page_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_action, pattern="^com_(browse|my|progress|leaderboard|reminder|stats)$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_progress_league, pattern="^com_progress_league_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_reminder_league, pattern="^com_reminder_league_\\d+$"))
@@ -200,9 +267,9 @@ class ReadingTrackerBot:
             
             # Achievement callbacks
             self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_achievements_menu, pattern="^achievement_menu$"))
-            self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_achievement_stats, pattern="^achievement_stats$"))
             self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_achievement_list, pattern="^achievement_list$"))
             self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_motivation_messages, pattern="^motivation_messages$"))
+            self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_motivation_messages, pattern=r"^messages_page_\d+$"))
             self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_weekly_summary, pattern="^weekly_summary$"))
             self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_mark_messages_read, pattern="^mark_messages_read$"))
             
@@ -211,6 +278,14 @@ class ReadingTrackerBot:
             self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_league_achievement_list, pattern="^league_achievement_list$"))
             self.application.add_handler(CallbackQueryHandler(self.achievement_handlers.handle_community_motivation_messages, pattern="^community_motivation_messages$"))
             self.application.add_handler(CallbackQueryHandler(self._handle_community_achievements_league, pattern=r"^com_achievements_league_\d+$"))
+            
+            # Profile callbacks
+            self.application.add_handler(CallbackQueryHandler(self.profile_handlers.handle_edit_profile, pattern="^edit_profile$"))
+            self.application.add_handler(CallbackQueryHandler(self.profile_handlers.handle_edit_field, pattern="^edit_(display_name|nickname|bio|daily_goal|reading_time)$"))
+            self.application.add_handler(CallbackQueryHandler(self.profile_handlers.handle_detailed_stats, pattern="^detailed_stats$"))
+            self.application.add_handler(CallbackQueryHandler(self.profile_handlers.handle_reading_goals, pattern="^reading_goals$"))
+            self.application.add_handler(CallbackQueryHandler(self.profile_handlers.handle_goal_progress, pattern="^goal_progress$"))
+            self.application.add_handler(CallbackQueryHandler(self.profile_handlers.handle_profile_command, pattern="^view_profile$"))
 
             # Reminder tick job
             if self.application.job_queue is not None:
@@ -415,14 +490,14 @@ class ReadingTrackerBot:
         # Send achievement messages to user
         for message in achievement_messages:
             try:
-                await context.bot.send_message(chat_id=user_id, text=message)
+                await context.bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.HTML)
             except Exception as e:
                 self.logger.error(f"Failed to send achievement message to user {user_id}: {e}")
         
         # Send progress celebration message if available
         if progress_message:
             try:
-                await context.bot.send_message(chat_id=user_id, text=progress_message)
+                await context.bot.send_message(chat_id=user_id, text=progress_message, parse_mode=ParseMode.HTML)
             except Exception as e:
                 self.logger.error(f"Failed to send progress message to user {user_id}: {e}")
         
@@ -450,7 +525,7 @@ class ReadingTrackerBot:
         else:
             # User is in individual mode
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
+                [InlineKeyboardButton("📊 Stats & Achievements", callback_data="achievement_menu")],
                 [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
             ])
         
@@ -534,12 +609,12 @@ class ReadingTrackerBot:
         progress_message = self.motivation_service.send_progress_celebration(user_id, pages, book_title)
         for message in achievement_messages:
             try:
-                await context.bot.send_message(chat_id=user_id, text=message)
+                await context.bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.HTML)
             except Exception:
                 pass
         if progress_message:
             try:
-                await context.bot.send_message(chat_id=user_id, text=progress_message)
+                await context.bot.send_message(chat_id=user_id, text=progress_message, parse_mode=ParseMode.HTML)
             except Exception:
                 pass
 
@@ -552,7 +627,7 @@ class ReadingTrackerBot:
             ])
         else:
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
+                [InlineKeyboardButton("📊 Stats & Achievements", callback_data="achievement_menu")],
                 [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
             ])
 
@@ -610,7 +685,16 @@ class ReadingTrackerBot:
                 if rt == now_hhmm:
                     chat_id = r['user_id']
                     try:
-                        await context.bot.send_message(chat_id=chat_id, text="⏰ Have you read your pages today? Use /progress to update.")
+                        # Build a polished reminder with quick action button
+                        reminder_text = (
+                            "⏰ <b>Daily Reading Reminder</b>\n\n"
+                            "Have you read your pages today?\n"
+                            "Tap <b>Update Progress</b> to log your reading now."
+                        )
+                        keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("📖 Update Progress", callback_data="ind_progress")]
+                        ])
+                        await context.bot.send_message(chat_id=chat_id, text=reminder_text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
                     except Exception:
                         pass
         except Exception as e:

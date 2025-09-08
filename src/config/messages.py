@@ -46,6 +46,8 @@ MODE_SELECTION_MESSAGE = """
 • Read together with others
 • Compete and encourage peers
 
+<b><i>You can switch anytime between the modes. enjoy solo reading and community challenges! </i></b>
+
 Which mode would you prefer?
 """
 
