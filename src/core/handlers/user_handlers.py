@@ -229,13 +229,13 @@ class UserHandlers:
                 nickname = ''
             context.user_data['reg_nickname'] = nickname
             context.user_data['reg_step'] = 'phone'
-            await update.message.reply_text("What's your phone number? (e.g., +1234567890 or 1234567890)")
+            await update.message.reply_text("What's your phone number?")
             return
         if step == 'phone':
             phone = update.message.text.strip()
             # Basic phone number validation
             if phone and not phone.replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '').isdigit():
-                await update.message.reply_text("Please enter a valid phone number (e.g., +1234567890 or 1234567890)")
+                await update.message.reply_text("Please enter a valid phone number.")
                 return
             try:
                 with db_manager.get_connection() as conn:
