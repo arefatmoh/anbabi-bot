@@ -66,19 +66,65 @@ def main():
         # Initialize database
         from src.database.database import db_manager
         logger.info("📊 Initializing database...")
-        db_manager.init_database()
-        logger.info("✅ Database initialized successfully")
         
-        # Log database info
-        info = db_manager.get_database_info()
-        logger.info(f"📊 Database Information:")
-        logger.info(f"  📁 Path: {info.get('database_path', 'Unknown')}")
-        logger.info(f"  💾 Size: {info.get('database_size_mb', 0)} MB")
-        table_counts = info.get('table_counts', {})
-        if table_counts:
-            logger.info("  📋 Tables:")
-            for table, count in table_counts.items():
-                logger.info(f"    • {table}: {count} records")
+        # First, verify database setup
+        db_path = os.getenv('DATABASE_PATH', '/app/reading_tracker.db')
+        logger.info(f"📁 Database path: {db_path}")
+        logger.info(f"📁 Database exists: {os.path.exists(db_path)}")
+        
+        try:
+            db_manager.init_database()
+            logger.info("✅ Database initialized successfully")
+            
+            # Log database info
+            info = db_manager.get_database_info()
+            logger.info(f"📊 Database Information:")
+            logger.info(f"  📁 Path: {info.get('database_path', 'Unknown')}")
+            logger.info(f"  💾 Size: {info.get('database_size_mb', 0)} MB")
+            table_counts = info.get('table_counts', {})
+            if table_counts:
+                logger.info("  📋 Tables:")
+                for table, count in table_counts.items():
+                    logger.info(f"    • {table}: {count} records")
+            else:
+                logger.warning("⚠️ No table information found - database may not be initialized properly")
+                
+        except Exception as e:
+            logger.error(f"❌ Database initialization failed: {e}")
+            logger.error("🔄 Attempting to create database manually...")
+            
+            # Try to create database manually
+            try:
+                import sqlite3
+                import os
+                from pathlib import Path
+                
+                logger.info(f"📁 Creating database at: {db_path}")
+                
+                # Ensure directory exists
+                Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+                logger.info(f"📁 Directory created: {Path(db_path).parent}")
+                
+                # Create database file
+                conn = sqlite3.connect(db_path)
+                conn.close()
+                logger.info("✅ Database file created successfully")
+                
+                # Try initialization again
+                db_manager.init_database()
+                logger.info("✅ Database initialized successfully on retry")
+                
+                # Verify tables were created
+                info = db_manager.get_database_info()
+                table_counts = info.get('table_counts', {})
+                if table_counts:
+                    logger.info("  📋 Tables created:")
+                    for table, count in table_counts.items():
+                        logger.info(f"    • {table}: {count} records")
+                
+            except Exception as e2:
+                logger.error(f"❌ Manual database creation also failed: {e2}")
+                raise
 
         # Create and start the bot
         bot = ReadingTrackerBot()
