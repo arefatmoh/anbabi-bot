@@ -207,7 +207,7 @@ class LeagueService:
                 cur = conn.cursor()
                 cur.execute(
                     """
-                    SELECT u.full_name, u.username, ub.user_id, b.title,
+                    SELECT u.full_name, ub.user_id, b.title,
                            ub.pages_read, b.total_pages,
                            ROUND(CASE WHEN b.total_pages > 0 THEN (ub.pages_read * 100.0) / b.total_pages ELSE 0 END, 1) AS pct
                     FROM league_members lm
@@ -227,7 +227,7 @@ class LeagueService:
                         {
                             "rank": rank,
                             "full_name": r[0] or "",
-                            "username": r[1] or "",
+                            
                             "user_id": r[2],
                             "book_title": r[3],
                             "pages_read": int(r[4] or 0),

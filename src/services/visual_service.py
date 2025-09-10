@@ -200,7 +200,7 @@ class VisualService:
             
             for i, entry in enumerate(leaderboard_data[:10], 1):
                 position = entry.get('position', i)
-                username = entry.get('username', 'Unknown')
+                username = entry.get('full_name') or f"User {entry.get('user_id', '')}"
                 pages = entry.get('pages_read', 0)
                 
                 if position in medals:

@@ -356,9 +356,9 @@ class AdminHandlers:
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute("""
-                    SELECT user_id, username, full_name, city, registration_date
+                    SELECT user_id, full_name, city, registration_date
                     FROM users 
-                    WHERE user_id = ? OR username LIKE ? OR full_name LIKE ?
+                    WHERE user_id = ? OR full_name LIKE ?
                     ORDER BY registration_date DESC LIMIT 10
                 """, (search_term, f"%{search_term}%", f"%{search_term}%"))
                 users = cur.fetchall()
@@ -498,7 +498,7 @@ class AdminHandlers:
         elif action == "user_stats":
             await self._show_user_statistics(query)
         elif action == "user_search":
-            await query.edit_message_text("🔍 <b>Search User</b>\n\nSend user ID or username to search:")
+            await query.edit_message_text("🔍 <b>Search User</b>\n\nSend user ID or name to search:")
         elif action == "user_ban":
             await query.edit_message_text("🚫 <b>Ban User</b>\n\nSend user ID to ban:")
         elif action == "user_unban":
@@ -600,7 +600,7 @@ class AdminHandlers:
         try:
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute("SELECT user_id, username, full_name, city, registration_date FROM users ORDER BY registration_date DESC LIMIT 20")
+                cur.execute("SELECT user_id, full_name, city, registration_date FROM users ORDER BY registration_date DESC LIMIT 20")
                 users = cur.fetchall()
             
             if not users:

@@ -396,7 +396,7 @@ class LeagueHandlers:
             return f"🏆 Leaderboard for {league_name}\n\nNo progress yet. Be the first to read!"
         lines: List[str] = [f"🏆 Leaderboard for {league_name}", ""]
         for row in lb[:20]:
-            name = row["full_name"] or ("@" + row["username"] if row["username"] else str(row["user_id"]))
+            name = row["full_name"] or str(row["user_id"])
             lines.append(
                 f"{row['rank']}. {name} — {row['progress_percent']}% ({row['pages_read']}/{row['total_pages']} pages)"
             )
@@ -477,7 +477,7 @@ class LeagueHandlers:
             if leaderboard:
                 message += f"🏆 <b>Top Performers:</b>\n"
                 for i, member in enumerate(leaderboard[:5]):
-                    name = member["full_name"] or ("@" + member["username"] if member["username"] else f"User {member['user_id']}")
+                    name = member["full_name"] or f"User {member['user_id']}"
                     message += f"{i+1}. {name} — {member['progress_percent']:.1f}%\n"
             else:
                 message += "📈 No progress data available yet.\n"

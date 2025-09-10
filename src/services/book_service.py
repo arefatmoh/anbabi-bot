@@ -27,8 +27,8 @@ class BookService:
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO users (user_id, daily_goal, username, full_name, city, contact)
-                VALUES (?, ?, '', '', '', '')
+                INSERT INTO users (user_id, daily_goal, full_name, city, contact)
+                VALUES (?, ?, '', '', '')
                 ON CONFLICT(user_id) DO UPDATE SET daily_goal = excluded.daily_goal
                 """,
                 (user_id, pages_per_day),

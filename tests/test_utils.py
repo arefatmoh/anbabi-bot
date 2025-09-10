@@ -26,8 +26,8 @@ def reset_user(user_id: int):
         # keep the user record if exists (or recreate as active)
         cur.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
         cur.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, full_name, city, is_active)
-            VALUES (?, 'tester', 'Tester', 'Addis Ababa', 1)
+            INSERT OR IGNORE INTO users (user_id, full_name, city, is_active)
+            VALUES (?, 'Tester', 'Addis Ababa', 1)
         ''', (user_id,))
         conn.commit()
 
@@ -35,7 +35,7 @@ def reset_user(user_id: int):
 def ensure_league(name: str, admin_id: int = 900000001, book_title: str = 'Test Book A') -> int:
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute('INSERT OR IGNORE INTO users (user_id, username, full_name, city, is_admin, is_active) VALUES (?, "test_admin", "Test Admin", "Addis Ababa", 1, 1)', (admin_id,))
+        cur.execute('INSERT OR IGNORE INTO users (user_id, full_name, city, is_admin, is_active) VALUES (?, "Test Admin", "Addis Ababa", 1, 1)', (admin_id,))
         cur.execute('INSERT OR IGNORE INTO books (title, author, total_pages, created_by, is_featured) VALUES (?, "Author", 200, ?, 0)', (book_title, admin_id))
         cur.execute('SELECT book_id FROM books WHERE title = ? ORDER BY book_id DESC LIMIT 1', (book_title,))
         book_id = cur.fetchone()[0]

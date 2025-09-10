@@ -88,7 +88,7 @@ class AdminTools:
                 
                 cursor.execute("""
                     SELECT 
-                        u.username, u.full_name, u.city,
+                        u.full_name, u.city,
                         b.title, b.author, b.total_pages,
                         ub.pages_read, ub.start_date, ub.last_updated,
                         rs.session_date, rs.pages_read as session_pages,

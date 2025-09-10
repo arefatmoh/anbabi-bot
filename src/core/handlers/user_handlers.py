@@ -252,7 +252,7 @@ class UserHandlers:
                         (
                             update.effective_user.id,
                             context.user_data.get('reg_name', ''),
-                            context.user_data.get('reg_nickname', '') or (update.effective_user.username or ''),
+                            context.user_data.get('reg_nickname', ''),
                             phone,
                         ),
                     )

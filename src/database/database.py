@@ -290,7 +290,6 @@ class DatabaseManager:
         ''')
         
         # Create indexes for better performance
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_books_user ON user_books(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_reading_sessions_user_date ON reading_sessions(user_id, session_date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_league_members_league ON league_members(league_id)')

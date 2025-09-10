@@ -412,7 +412,7 @@ class LeagueRepository:
             cur = self.conn.cursor()
             cur.execute(
                 """
-                SELECT u.full_name, u.username, u.city, b.title, b.author, b.total_pages,
+                SELECT u.full_name, u.city, b.title, b.author, b.total_pages,
                        ub.pages_read, ub.start_date, ub.last_updated
                 FROM league_members lm
                 JOIN users u ON u.user_id = lm.user_id
@@ -429,7 +429,7 @@ class LeagueRepository:
                 out.append(
                     {
                         "full_name": r[0] or "",
-                        "username": r[1] or "",
+                        
                         "city": r[2] or "",
                         "book_title": r[3] or "",
                         "book_author": r[4] or "",
