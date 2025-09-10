@@ -97,7 +97,6 @@ def main():
             # Try to create database manually
             try:
                 import sqlite3
-                import os
                 from pathlib import Path
                 
                 logger.info(f"📁 Creating database at: {db_path}")
