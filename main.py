@@ -9,6 +9,7 @@ import logging
 import sys
 from pathlib import Path
 import io
+import os
 
 # Add project root to Python path so 'src' is importable
 ROOT_DIR = Path(__file__).resolve().parent
