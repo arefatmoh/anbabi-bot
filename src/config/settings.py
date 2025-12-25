@@ -26,7 +26,19 @@ ADMIN_USER_IDS = [
 ]
 
 # Database Configuration
-DATABASE_PATH = os.getenv('DATABASE_PATH', BASE_DIR / 'reading_tracker.db')
+# Database Configuration
+# DATABASE_PATH = os.getenv('DATABASE_PATH', BASE_DIR / 'reading_tracker.db')
+DB_TYPE = os.getenv('DB_TYPE', 'postgres')  # 'sqlite' or 'postgres'
+
+# Postgres Settings
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME')
+DB_USER = os.getenv('DB_USER')
+DB_PASSWORD = os.getenv('DB_PASSWORD')
+
+# SQLite Fallback (for local testing without PG)
+SQLITE_DB_PATH = os.getenv('DATABASE_PATH', BASE_DIR / 'reading_tracker.db')
 
 # Google Sheets Configuration (optional)
 GOOGLE_SHEETS_CREDENTIALS_FILE = os.getenv('GOOGLE_SHEETS_CREDENTIALS_FILE')

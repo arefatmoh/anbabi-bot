@@ -69,7 +69,8 @@ def main():
         logger.info("📊 Initializing database...")
         
         # First, verify database setup
-        db_path = os.getenv('DATABASE_PATH', '/app/reading_tracker.db')
+        from src.config.settings import SQLITE_DB_PATH
+        db_path = os.getenv('DATABASE_PATH', str(SQLITE_DB_PATH))
         logger.info(f"📁 Database path: {db_path}")
         logger.info(f"📁 Database exists: {os.path.exists(db_path)}")
         

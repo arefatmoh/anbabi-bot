@@ -43,11 +43,11 @@ class UserHandlers:
         try:
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute("SELECT full_name, nickname FROM users WHERE user_id = ?", (user_id,))
+                cur.execute("SELECT full_name, nickname FROM users WHERE user_id = %s", (user_id,))
                 row = cur.fetchone()
                 if row:
-                    full_name_db = row[0]
-                    nickname_db = row[1]
+                    full_name_db = row['full_name']
+                    nickname_db = row['nickname']
         except Exception as e:
             self.logger.error(f"DB read error: {e}")
         if full_name_db:
@@ -243,7 +243,7 @@ class UserHandlers:
                     cur.execute(
                         """
                         INSERT INTO users (user_id, full_name, nickname, city, contact)
-                        VALUES (?, ?, ?, '', ?)
+                        VALUES (%s, %s, %s, '', %s)
                         ON CONFLICT(user_id) DO UPDATE SET
                             full_name = excluded.full_name,
                             nickname = excluded.nickname,
@@ -528,7 +528,7 @@ class UserHandlers:
                     with db_manager.get_connection() as conn:
                         cur = conn.cursor()
                         cur.execute(
-                            "SELECT title, author, total_pages FROM books WHERE book_id = ?",
+                            "SELECT title, author, total_pages FROM books WHERE book_id = %s",
                             (league.current_book_id,)
                         )
                         book_data = cur.fetchone()
@@ -537,9 +537,9 @@ class UserHandlers:
                         # Create a book object for the progress update
                         book = {
                             'book_id': league.current_book_id,
-                            'title': book_data[0],
-                            'author': book_data[1],
-                            'total_pages': book_data[2],
+                            'title': book_data['title'],
+                            'author': book_data['author'],
+                            'total_pages': book_data['total_pages'],
                             'pages_read': 0,
                             'status': 'active'
                         }
@@ -908,15 +908,8 @@ class UserHandlers:
         if not active:
             await update.message.reply_text("You have no active books. Use /books to start one.")
             return
-        if len(active) == 1:
-            context.user_data['current_book_id'] = active[0]['book_id']
-            # Add inline keyboard for progress update options
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📖 Update Progress", callback_data=f"progress_select_{active[0]['book_id']}")],
-                [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")]
-            ])
-            await update.message.reply_text(PROGRESS_UPDATE_MESSAGE, reply_markup=keyboard)
-            return
+
+        # Always show list of books for selection as per improved UX flow
         keyboard = []
         for book in active:
             keyboard.append([
@@ -925,6 +918,10 @@ class UserHandlers:
                     callback_data=f"progress_select_{book['book_id']}"
                 )
             ])
+        
+        # Add back button
+        keyboard.append([InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")])
+        
         await update.message.reply_text("Select a book to update progress:", reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

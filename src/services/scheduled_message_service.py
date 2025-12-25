@@ -136,12 +136,12 @@ class ScheduledMessageService:
                 
                 cursor.execute('''
                     SELECT user_id FROM users 
-                    WHERE is_active = 1 
-                    AND last_activity > ?
+                    WHERE is_active = TRUE 
+                    AND last_activity > %s
                     ORDER BY user_id
                 ''', (thirty_days_ago,))
                 
-                return [row[0] for row in cursor.fetchall()]
+                return [row['user_id'] for row in cursor.fetchall()]
                 
         except Exception as e:
             self.logger.error(f"Failed to get active users: {e}")

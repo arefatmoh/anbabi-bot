@@ -69,8 +69,8 @@ class ReminderService:
             cur.execute(
                 """
                 UPDATE reminders
-                SET reminder_time = ?, frequency = ?, is_active = 1
-                WHERE user_id = ?
+                SET reminder_time = %s, frequency = %s, is_active = TRUE
+                WHERE user_id = %s
                 """,
                 (t.strftime("%H:%M:00"), frequency, user_id),
             )
@@ -78,7 +78,7 @@ class ReminderService:
                 cur.execute(
                     """
                     INSERT INTO reminders (user_id, reminder_time, frequency, is_active, created_at)
-                    VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                    VALUES (%s, %s, %s, TRUE, CURRENT_TIMESTAMP)
                     """,
                     (user_id, t.strftime("%H:%M:00"), frequency),
                 )
@@ -88,23 +88,23 @@ class ReminderService:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT reminder_time, frequency, is_active, last_sent FROM reminders WHERE user_id = ?",
+                "SELECT reminder_time, frequency, is_active, last_sent FROM reminders WHERE user_id = %s",
                 (user_id,),
             )
             r = cur.fetchone()
             if not r:
                 return None
             return {
-                "reminder_time": str(r[0]),
-                "frequency": r[1],
-                "is_active": bool(r[2]),
-                "last_sent": str(r[3]) if r[3] else None,
+                "reminder_time": str(r['reminder_time']),
+                "frequency": r['frequency'],
+                "is_active": bool(r['is_active']),
+                "last_sent": str(r['last_sent']) if r['last_sent'] else None,
             }
 
     def remove_reminder(self, user_id: int) -> bool:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute("UPDATE reminders SET is_active = 0 WHERE user_id = ?", (user_id,))
+            cur.execute("UPDATE reminders SET is_active = FALSE WHERE user_id = %s", (user_id,))
             conn.commit()
             return cur.rowcount > 0
 
@@ -112,16 +112,16 @@ class ReminderService:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT user_id, reminder_time, frequency FROM reminders WHERE is_active = 1"
+                "SELECT user_id, reminder_time, frequency FROM reminders WHERE is_active = TRUE"
             )
             rows = cur.fetchall()
             res: List[Dict] = []
             for r in rows:
                 res.append(
                     {
-                        "user_id": int(r[0]),
-                        "reminder_time": str(r[1]),
-                        "frequency": r[2],
+                        "user_id": int(r['user_id']),
+                        "reminder_time": str(r['reminder_time']),
+                        "frequency": r['frequency'],
                     }
                 )
             return res

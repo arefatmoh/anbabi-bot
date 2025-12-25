@@ -57,11 +57,57 @@ class AdminHandlers:
             await query.edit_message_text("❌ Access denied. Admin privileges required.")
             return
         
-        if query.data == "admin_database":
+        # Parse action
+        if not query.data.startswith("admin_"):
+            return
+
+        action = query.data.split('_', 1)[1]
+        
+        if action == "database":
             await self.show_database_info(update, context)
+        elif action == "books":
+            await self._show_book_management(query)
+        elif action == "leagues":
+            await self._show_league_management(query)
+        elif action == "users":
+            await self._show_user_management(query)
+        elif action == "analytics":
+            await self._show_analytics(query)
+        elif action == "system":
+            await self._show_system_settings(query)
+        elif action == "maintenance":
+            await self._show_maintenance(query)
+        elif action.startswith("book_"):
+            if action == "book_cancel":
+                await self.cancel_book_addition(update, context)
+            else:
+                await self._handle_book_action(query, action, context)
+        elif action.startswith("league_"):
+            await self._handle_league_action(query, action, context)
+        elif action.startswith("user_"):
+            await self._handle_user_action(query, action)
+        elif action.startswith("analytics_"):
+            await self._handle_analytics_action(query, action)
+        elif action.startswith("books_page_"):
+            page = int(action.split("_")[-1])
+            await self._show_all_books(query, page)
+        elif action.startswith("message_page_"):
+            page = int(action.split("_")[-1])
+            await self._show_users_for_message(query, page)
+        elif action.startswith("message_user_"):
+            user_id = int(action.split("_")[-1])
+            context.user_data['message_target_user'] = user_id
+            await query.edit_message_text(
+                f"📧 <b>Send Message</b>\n\n"
+                f"Sending to User ID: {user_id}\n\n"
+                "Type your message:"
+            )
+        elif action == "back":
+            await self._show_admin_dashboard(query)
     
     async def show_database_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show database information."""
+        query = update.callback_query
         try:
             info = db_manager.get_database_info()
             
@@ -89,33 +135,7 @@ class AdminHandlers:
         except Exception as e:
             await query.edit_message_text(f"❌ Error getting database info: {e}")
         
-        action = query.data.split('_', 1)[1]  # Remove 'admin_' prefix
-        
-        if action == "books":
-            await self._show_book_management(query)
-        elif action == "leagues":
-            await self._show_league_management(query)
-        elif action == "users":
-            await self._show_user_management(query)
-        elif action == "analytics":
-            await self._show_analytics(query)
-        elif action == "system":
-            await self._show_system_settings(query)
-        elif action == "maintenance":
-            await self._show_maintenance(query)
-        elif action.startswith("book_"):
-            await self._handle_book_action(query, action, context)
-        elif action.startswith("league_"):
-            await self._handle_league_action(query, action, context)
-        elif action.startswith("user_"):
-            await self._handle_user_action(query, action)
-        elif action.startswith("analytics_"):
-            await self._handle_analytics_action(query, action)
-        elif action.startswith("books_page_"):
-            page = int(action.split("_")[-1])
-            await self._show_all_books(query, page)
-        elif action == "back":
-            await self._show_admin_dashboard(query)
+
     
     async def _show_admin_dashboard(self, query):
         """Show admin dashboard for callback queries."""
@@ -235,7 +255,12 @@ class AdminHandlers:
         """Handle book management actions."""
         if action == "book_add":
             # Start book addition directly
-            await query.edit_message_text("📖 <b>Add Featured Book</b>\n\nLet's add a new featured book step by step!\n\nPlease provide the book title:")
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_book_cancel")]])
+            await query.edit_message_text(
+                "📖 <b>Add Featured Book - Step 1/3</b>\n\n"
+                "Please provide the book title:",
+                reply_markup=keyboard
+            )
             
             # Set conversation state for book addition
             if context:
@@ -259,15 +284,11 @@ class AdminHandlers:
             
             # Check if we're in step-by-step mode
             if not context.user_data.get('adding_book'):
-                # Start step-by-step process
-                context.user_data['adding_book'] = True
-                context.user_data['book_data'] = {}
-                context.user_data['book_step'] = 'title'
-                
-                await update.message.reply_text(
-                    "📖 <b>Add Featured Book - Step 1/3</b>\n\n"
-                    "Please provide the book title:"
-                )
+                return
+            
+            # Handle cancel command
+            if text.lower() == '/cancel' or text.lower() == 'cancel':
+                await self.cancel_book_addition(update, context)
                 return
             
             # Handle current step
@@ -281,10 +302,12 @@ class AdminHandlers:
                 context.user_data['book_data']['title'] = text
                 context.user_data['book_step'] = 'author'
                 
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_book_cancel")]])
                 await update.message.reply_text(
                     f"📝 <b>Title:</b> {text}\n\n"
                     "✍️ <b>Step 2/3</b>\n"
-                    "Please provide the author name:"
+                    "Please provide the author name:",
+                    reply_markup=keyboard
                 )
                 
             elif current_step == 'author':
@@ -295,11 +318,13 @@ class AdminHandlers:
                 context.user_data['book_data']['author'] = text
                 context.user_data['book_step'] = 'pages'
                 
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_book_cancel")]])
                 await update.message.reply_text(
                     f"📝 <b>Title:</b> {context.user_data['book_data']['title']}\n"
                     f"✍️ <b>Author:</b> {text}\n\n"
                     "📄 <b>Step 3/3</b>\n"
-                    "Please provide the total number of pages:"
+                    "Please provide the total number of pages:",
+                    reply_markup=keyboard
                 )
                 
             elif current_step == 'pages':
@@ -317,10 +342,12 @@ class AdminHandlers:
                         cur = conn.cursor()
                         cur.execute("""
                             INSERT INTO books (title, author, total_pages, is_featured, created_by)
-                            VALUES (?, ?, ?, 1, ?)
+                            VALUES (%s, %s, %s, TRUE, %s)
+                            RETURNING book_id
                         """, (title, author, pages, update.effective_user.id))
+                        # For RealDictCursor, fetchone returns a dict
+                        book_id = cur.fetchone()['book_id']
                         conn.commit()
-                        book_id = cur.lastrowid
                     
                     # Clear the step-by-step data
                     context.user_data.pop('adding_book', None)
@@ -344,6 +371,18 @@ class AdminHandlers:
         except Exception as e:
             self.logger.error(f"Error adding book: {e}")
             await update.message.reply_text("❌ Error adding book")
+
+    async def cancel_book_addition(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Cancel the book addition process."""
+        context.user_data.pop('adding_book', None)
+        context.user_data.pop('book_data', None)
+        context.user_data.pop('book_step', None)
+        
+        msg = "❌ Book addition cancelled."
+        if update.callback_query:
+            await update.callback_query.edit_message_text(msg)
+        else:
+            await update.message.reply_text(msg)
     
     async def handle_user_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle user search from admin."""
@@ -358,9 +397,9 @@ class AdminHandlers:
                 cur.execute("""
                     SELECT user_id, full_name, city, registration_date
                     FROM users 
-                    WHERE user_id = ? OR full_name LIKE ?
+                    WHERE user_id = %s OR full_name LIKE %s
                     ORDER BY registration_date DESC LIMIT 10
-                """, (search_term, f"%{search_term}%", f"%{search_term}%"))
+                """, (search_term_int if str(search_term_int) == search_term else -1, f"%{search_term}%"))
                 users = cur.fetchall()
             
             if not users:
@@ -369,11 +408,11 @@ class AdminHandlers:
             
             text = f"🔍 <b>Search Results for '{search_term}'</b>\n\n"
             for user in users:
-                text += f"<b>{user[2] or 'Unknown'}</b>\n"
-                text += f"   Username: @{user[1] or 'N/A'}\n"
-                text += f"   City: {user[3] or 'N/A'}\n"
-                text += f"   ID: {user[0]}\n"
-                text += f"   Joined: {user[4][:10] if user[4] else 'N/A'}\n\n"
+                text += f"<b>{user['city'] or 'Unknown'}</b>\n"
+                text += f"   Name: {user['full_name'] or 'N/A'}\n"
+                text += f"   City: {user['city'] or 'N/A'}\n"
+                text += f"   ID: {user['user_id']}\n"
+                text += f"   Joined: {str(user['registration_date'])[:10] if user['registration_date'] else 'N/A'}\n\n"
             
             await update.message.reply_text(text)
             
@@ -391,7 +430,7 @@ class AdminHandlers:
             
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
+                cur.execute("UPDATE users SET is_banned = TRUE WHERE user_id = %s", (user_id,))
                 conn.commit()
             
             await update.message.reply_text(f"🚫 User {user_id} has been banned.")
@@ -412,7 +451,7 @@ class AdminHandlers:
             
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
+                cur.execute("UPDATE users SET is_banned = FALSE WHERE user_id = %s", (user_id,))
                 conn.commit()
             
             await update.message.reply_text(f"✅ User {user_id} has been unbanned.")
@@ -446,6 +485,67 @@ class AdminHandlers:
         except Exception as e:
             self.logger.error(f"Error sending message: {e}")
             await update.message.reply_text("❌ Error sending message")
+    
+    async def _show_users_for_message(self, query, page=0):
+        """Show list of users with buttons for message sending."""
+        try:
+            users_per_page = 10
+            offset = page * users_per_page
+            
+            with db_manager.get_connection() as conn:
+                cur = conn.cursor()
+                # Get total count
+                cur.execute("SELECT COUNT(*) as count FROM users")
+                total_users = cur.fetchone()['count']
+                
+                # Get users for current page
+                cur.execute("""
+                    SELECT user_id, full_name, city 
+                    FROM users 
+                    ORDER BY registration_date DESC 
+                    LIMIT %s OFFSET %s
+                """, (users_per_page, offset))
+                users = cur.fetchall()
+            
+            if not users and page == 0:
+                await query.edit_message_text("📧 No users found in the system.")
+                return
+            
+            total_pages = (total_users + users_per_page - 1) // users_per_page
+            current_page = page + 1
+            
+            # Create inline keyboard with user buttons
+            keyboard_buttons = []
+            for user in users:
+                user_display = f"{user['full_name'] or 'Unknown'} ({user['city'] or 'N/A'})"
+                keyboard_buttons.append([InlineKeyboardButton(user_display, callback_data=f"admin_message_user_{user['user_id']}")])
+            
+            # Navigation buttons
+            nav_buttons = []
+            if page > 0:
+                nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_message_page_{page-1}"))
+            if page < total_pages - 1:
+                nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_message_page_{page+1}"))
+            
+            if nav_buttons:
+                keyboard_buttons.append(nav_buttons)
+            
+            # Back button
+            keyboard_buttons.append([InlineKeyboardButton("⬅️ Back to Users", callback_data="admin_users")])
+            
+            keyboard = InlineKeyboardMarkup(keyboard_buttons)
+            
+            await query.edit_message_text(
+                f"📧 <b>Send Message to User</b>\n\n"
+                f"Select a user to message:\n"
+                f"Page {current_page}/{total_pages}",
+                reply_markup=keyboard
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error showing users for message: {e}")
+            await query.edit_message_text("❌ Error retrieving users.")
+
     
     async def _handle_league_action(self, query, action, context=None):
         """Handle league management actions."""
@@ -504,7 +604,15 @@ class AdminHandlers:
         elif action == "user_unban":
             await query.edit_message_text("✅ <b>Unban User</b>\n\nSend user ID to unban:")
         elif action == "user_message":
-            await query.edit_message_text("📧 <b>Send Message</b>\n\nSend message in format:\nUserID: Message\n\nExample: 123456789: Hello!")
+            await self._show_users_for_message(query)
+        elif action.startswith("message_user_"):
+            user_id = int(action.split("_")[-1])
+            context.user_data['message_target_user'] = user_id
+            await query.edit_message_text(
+                f"📧 <b>Send Message</b>\n\n"
+                f"Sending to User ID: {user_id}\n\n"
+                "Type your message:"
+            )
     
     async def _show_all_books(self, query, page=0):
         """Show all books in the system with pagination."""
@@ -515,15 +623,16 @@ class AdminHandlers:
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
                 # Get total count
-                cur.execute("SELECT COUNT(*) FROM books")
-                total_books = cur.fetchone()[0]
+                # Get total count
+                cur.execute("SELECT COUNT(*) as count FROM books")
+                total_books = cur.fetchone()['count']
                 
                 # Get books for current page
                 cur.execute("""
                     SELECT book_id, title, author, total_pages, is_featured 
                     FROM books 
                     ORDER BY book_id DESC 
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 """, (books_per_page, offset))
                 books = cur.fetchall()
             
@@ -538,11 +647,11 @@ class AdminHandlers:
             text += f"📄 Page {current_page}/{total_pages} ({total_books} total books)\n\n"
             
             for book in books:
-                featured = "⭐" if book[4] else "📖"
-                text += f"{featured} <b>{book[1]}</b>\n"
-                text += f"   Author: {book[2]}\n"
-                text += f"   Pages: {book[3]}\n"
-                text += f"   ID: {book[0]}\n\n"
+                featured = "⭐" if book['is_featured'] else "📖"
+                text += f"{featured} <b>{book['title']}</b>\n"
+                text += f"   Author: {book['author']}\n"
+                text += f"   Pages: {book['total_pages']}\n"
+                text += f"   ID: {book['book_id']}\n\n"
             
             # Create pagination keyboard
             keyboard_buttons = []
@@ -600,7 +709,7 @@ class AdminHandlers:
         try:
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute("SELECT user_id, full_name, city, registration_date FROM users ORDER BY registration_date DESC LIMIT 20")
+                cur.execute("SELECT user_id, full_name, nickname, city, contact, registration_date FROM users ORDER BY registration_date DESC LIMIT 20")
                 users = cur.fetchall()
             
             if not users:
@@ -609,11 +718,13 @@ class AdminHandlers:
             
             text = "👥 <b>Recent Users</b> (Last 20)\n\n"
             for user in users:
-                text += f"<b>{user[2] or 'Unknown'}</b>\n"
-                text += f"   Username: @{user[1] or 'N/A'}\n"
-                text += f"   City: {user[3] or 'N/A'}\n"
-                text += f"   ID: {user[0]}\n"
-                text += f"   Joined: {user[4][:10] if user[4] else 'N/A'}\n\n"
+                text += f"<b>{user['full_name'] or 'Unknown'}</b>\n"
+                if user['nickname']:
+                    text += f"   Nickname: {user['nickname']}\n"
+                text += f"   City: {user['city'] or 'N/A'}\n"
+                text += f"   Phone: {user['contact'] or 'N/A'}\n"
+                text += f"   ID: {user['user_id']}\n"
+                text += f"   Joined: {str(user['registration_date'])[:10] if user['registration_date'] else 'N/A'}\n\n"
             
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Back to Users", callback_data="admin_users")],
@@ -632,23 +743,24 @@ class AdminHandlers:
                 cur = conn.cursor()
                 
                 # Total users
-                cur.execute("SELECT COUNT(*) FROM users")
-                total_users = cur.fetchone()[0]
+                # Total users
+                cur.execute("SELECT COUNT(*) as count FROM users")
+                total_users = cur.fetchone()['count']
                 
                 # Active users (last 7 days)
-                cur.execute("SELECT COUNT(DISTINCT user_id) FROM reading_sessions WHERE session_date >= date('now', '-7 days')")
-                active_users = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(DISTINCT user_id) as count FROM reading_sessions WHERE session_date >= date('now', '-7 days')")
+                active_users = cur.fetchone()['count']
                 
                 # Total books read
-                cur.execute("SELECT COUNT(*) FROM user_books WHERE status = 'completed'")
-                books_completed = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM user_books WHERE status = 'completed'")
+                books_completed = cur.fetchone()['count']
                 
                 # Total pages read
-                cur.execute("SELECT SUM(pages_read) FROM user_books")
-                total_pages = cur.fetchone()[0] or 0
+                cur.execute("SELECT SUM(pages_read) as total FROM user_books")
+                total_pages = cur.fetchone()['total'] or 0
                 
                 # Users by city
-                cur.execute("SELECT city, COUNT(*) FROM users WHERE city IS NOT NULL AND city != '' GROUP BY city ORDER BY COUNT(*) DESC LIMIT 5")
+                cur.execute("SELECT city, COUNT(*) as count FROM users WHERE city IS NOT NULL AND city != '' GROUP BY city ORDER BY COUNT(*) DESC LIMIT 5")
                 cities = cur.fetchall()
             
             text = "📊 <b>User Statistics</b>\n\n"
@@ -659,8 +771,8 @@ class AdminHandlers:
             
             if cities:
                 text += "<b>Top Cities:</b>\n"
-                for city, count in cities:
-                    text += f"   {city}: {count} users\n"
+                for row in cities:
+                    text += f"   {row['city']}: {row['count']} users\n"
             
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Back to Users", callback_data="admin_users")],
@@ -679,20 +791,21 @@ class AdminHandlers:
                 cur = conn.cursor()
                 
                 # Total leagues
-                cur.execute("SELECT COUNT(*) FROM leagues")
-                total_leagues = cur.fetchone()[0]
+                # Total leagues
+                cur.execute("SELECT COUNT(*) as count FROM leagues")
+                total_leagues = cur.fetchone()['count']
                 
                 # Active leagues
-                cur.execute("SELECT COUNT(*) FROM leagues WHERE status = 'active'")
-                active_leagues = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM leagues WHERE status = 'active'")
+                active_leagues = cur.fetchone()['count']
                 
                 # Total league members
-                cur.execute("SELECT COUNT(*) FROM league_members WHERE is_active = 1")
-                total_members = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM league_members WHERE is_active = TRUE")
+                total_members = cur.fetchone()['count']
                 
                 # Average league size
-                cur.execute("SELECT AVG(member_count) FROM (SELECT league_id, COUNT(*) as member_count FROM league_members WHERE is_active = 1 GROUP BY league_id)")
-                avg_size = cur.fetchone()[0] or 0
+                cur.execute("SELECT AVG(member_count) as avg FROM (SELECT league_id, COUNT(*) as member_count FROM league_members WHERE is_active = TRUE GROUP BY league_id) sub")
+                avg_size = cur.fetchone()['avg'] or 0
             
             text = "🏆 <b>League Analytics</b>\n\n"
             text += f"📊 Total Leagues: {total_leagues}\n"
@@ -733,16 +846,17 @@ class AdminHandlers:
                 cur = conn.cursor()
                 
                 # Total reading sessions
-                cur.execute("SELECT COUNT(*) FROM reading_sessions")
-                total_sessions = cur.fetchone()[0]
+                # Total reading sessions
+                cur.execute("SELECT COUNT(*) as count FROM reading_sessions")
+                total_sessions = cur.fetchone()['count']
                 
                 # Total pages read
-                cur.execute("SELECT SUM(pages_read) FROM user_books")
-                total_pages = cur.fetchone()[0] or 0
+                cur.execute("SELECT SUM(pages_read) as sum FROM user_books")
+                total_pages = cur.fetchone()['sum'] or 0
                 
                 # Average pages per session
-                cur.execute("SELECT AVG(pages_read) FROM reading_sessions")
-                avg_pages = cur.fetchone()[0] or 0
+                cur.execute("SELECT AVG(pages_read) as avg FROM reading_sessions")
+                avg_pages = cur.fetchone()['avg'] or 0
                 
                 # Most active day
                 cur.execute("""
@@ -756,13 +870,13 @@ class AdminHandlers:
                 
                 # Reading streaks
                 cur.execute("""
-                    SELECT MAX(streak) FROM (
+                    SELECT MAX(streak) as max FROM (
                         SELECT user_id, COUNT(*) as streak
                         FROM reading_sessions 
                         GROUP BY user_id, session_date
-                    )
+                    ) sub
                 """)
-                max_streak = cur.fetchone()[0] or 0
+                max_streak = cur.fetchone()['max'] or 0
             
             text = "📈 <b>Reading Analytics</b>\n\n"
             text += f"📊 Total Sessions: {total_sessions:,}\n"
@@ -790,21 +904,27 @@ class AdminHandlers:
                 cur = conn.cursor()
                 
                 # Database size
-                cur.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
-                db_size = cur.fetchone()[0]
+                # Database size
+                try:
+                    cur.execute("SELECT pg_database_size(current_database()) as size")
+                    db_size = cur.fetchone()['size']
+                except Exception:
+                    # Fallback or specific handling if needed, though we migrate to postgres
+                    db_size = 0
                 
                 # Table counts
-                cur.execute("SELECT COUNT(*) FROM users")
-                user_count = cur.fetchone()[0]
+                # Table counts
+                cur.execute("SELECT COUNT(*) as count FROM users")
+                user_count = cur.fetchone()['count']
                 
-                cur.execute("SELECT COUNT(*) FROM books")
-                book_count = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM books")
+                book_count = cur.fetchone()['count']
                 
-                cur.execute("SELECT COUNT(*) FROM leagues")
-                league_count = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM leagues")
+                league_count = cur.fetchone()['count']
                 
-                cur.execute("SELECT COUNT(*) FROM reading_sessions")
-                session_count = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM reading_sessions")
+                session_count = cur.fetchone()['count']
             
             text = "📊 <b>System Health</b>\n\n"
             text += f"💾 Database Size: {db_size / 1024:.1f} KB\n"

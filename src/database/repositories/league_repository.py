@@ -17,9 +17,9 @@ from src.config.constants import LeagueStatus
 class LeagueRepository:
     """Repository for league-related database operations."""
     
-    def __init__(self, db_connection: Connection):
-        """Initialize league repository."""
-        self.conn = db_connection
+    def __init__(self, db_manager):
+        """Initialize league repository with database manager."""
+        self.db_manager = db_manager
         self.logger = logging.getLogger(__name__)
     
     def create_league(self, league: League) -> int:
@@ -32,7 +32,8 @@ class LeagueRepository:
                     name, description, admin_id, current_book_id,
                     start_date, end_date, daily_goal, max_members,
                     status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING league_id
             """, (
                 league.name, league.description, league.admin_id,
                 league.current_book_id, league.start_date, league.end_date,
@@ -40,7 +41,7 @@ class LeagueRepository:
                 league.created_at
             ))
             
-            league_id = cursor.lastrowid
+            league_id = cursor.fetchone()['league_id']
             self.conn.commit()
             
             self.logger.info(f"Created league '{league.name}' with ID {league_id}")
@@ -59,21 +60,33 @@ class LeagueRepository:
             cursor.execute("""
                 SELECT league_id, name, description, admin_id, current_book_id,
                        start_date, end_date, daily_goal, max_members, status, created_at
-                FROM leagues WHERE league_id = ?
+                FROM leagues WHERE league_id = %s
             """, (league_id,))
             
             row = cursor.fetchone()
             if row:
-                # Convert string dates to date objects
-                start_date = date.fromisoformat(row[5]) if row[5] else None
-                end_date = date.fromisoformat(row[6]) if row[6] else None
-                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
+                # Convert string dates to date objects (Postgres returns date objects usually, but let's be safe or just use them)
+                # Actually psycopg2 returns date/datetime objects directly, no need for fromisoformat if it's already a date object.
+                # But to stay safe with potential string returning or existing logic, let's just handle it.
+                # However, with RealDictCursor and psycopg2, dates are python objects.
+                # Existing code expects ISO format strings? Or did SQLite return strings?
+                # SQLite returns strings. Postgres returns objects.
+                # I should handle both or just assume objects for Postgres. 
+                # Let's try to be robust. if isinstance(row['start_date'], str)...
                 
+                # Simplified for Postgres:
                 return League(
-                    league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
-                    end_date=end_date, daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=created_at
+                    league_id=row['league_id'],
+                    name=row['name'],
+                    description=row['description'],
+                    admin_id=row['admin_id'],
+                    current_book_id=row['current_book_id'],
+                    start_date=row['start_date'], # Psycopg2 returns date object
+                    end_date=row['end_date'],
+                    daily_goal=row['daily_goal'],
+                    max_members=row['max_members'],
+                    status=LeagueStatus(row['status']),
+                    created_at=row['created_at'] # Psycopg2 returns datetime object
                 )
             return None
             
@@ -89,21 +102,23 @@ class LeagueRepository:
             cursor.execute("""
                 SELECT league_id, name, description, admin_id, current_book_id,
                        start_date, end_date, daily_goal, max_members, status, created_at
-                FROM leagues WHERE status = ? ORDER BY created_at DESC
+                FROM leagues WHERE status = %s ORDER BY created_at DESC
             """, (LeagueStatus.ACTIVE.value,))
             
             leagues = []
             for row in cursor.fetchall():
-                # Convert string dates to date objects
-                start_date = date.fromisoformat(row[5]) if row[5] else None
-                end_date = date.fromisoformat(row[6]) if row[6] else None
-                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
-                
                 league = League(
-                    league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
-                    end_date=end_date, daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=created_at
+                    league_id=row['league_id'],
+                    name=row['name'],
+                    description=row['description'],
+                    admin_id=row['admin_id'],
+                    current_book_id=row['current_book_id'],
+                    start_date=row['start_date'],
+                    end_date=row['end_date'],
+                    daily_goal=row['daily_goal'],
+                    max_members=row['max_members'],
+                    status=LeagueStatus(row['status']),
+                    created_at=row['created_at']
                 )
                 leagues.append(league)
             
@@ -126,16 +141,18 @@ class LeagueRepository:
             
             leagues = []
             for row in cursor.fetchall():
-                # Convert string dates to date objects
-                start_date = date.fromisoformat(row[5]) if row[5] else None
-                end_date = date.fromisoformat(row[6]) if row[6] else None
-                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
-                
                 league = League(
-                    league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
-                    end_date=end_date, daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=created_at
+                    league_id=row['league_id'],
+                    name=row['name'],
+                    description=row['description'],
+                    admin_id=row['admin_id'],
+                    current_book_id=row['current_book_id'],
+                    start_date=row['start_date'],
+                    end_date=row['end_date'],
+                    daily_goal=row['daily_goal'],
+                    max_members=row['max_members'],
+                    status=LeagueStatus(row['status']),
+                    created_at=row['created_at']
                 )
                 leagues.append(league)
             
@@ -153,21 +170,23 @@ class LeagueRepository:
             cursor.execute("""
                 SELECT league_id, name, description, admin_id, current_book_id,
                        start_date, end_date, daily_goal, max_members, status, created_at
-                FROM leagues WHERE admin_id = ? ORDER BY created_at DESC
+                FROM leagues WHERE admin_id = %s ORDER BY created_at DESC
             """, (admin_id,))
             
             leagues = []
             for row in cursor.fetchall():
-                # Convert string dates to date objects
-                start_date = date.fromisoformat(row[5]) if row[5] else None
-                end_date = date.fromisoformat(row[6]) if row[6] else None
-                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
-                
                 league = League(
-                    league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
-                    end_date=end_date, daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=created_at
+                    league_id=row['league_id'],
+                    name=row['name'],
+                    description=row['description'],
+                    admin_id=row['admin_id'],
+                    current_book_id=row['current_book_id'],
+                    start_date=row['start_date'],
+                    end_date=row['end_date'],
+                    daily_goal=row['daily_goal'],
+                    max_members=row['max_members'],
+                    status=LeagueStatus(row['status']),
+                    created_at=row['created_at']
                 )
                 leagues.append(league)
             
@@ -183,7 +202,7 @@ class LeagueRepository:
             cursor = self.conn.cursor()
             
             cursor.execute("""
-                UPDATE leagues SET status = ? WHERE league_id = ?
+                UPDATE leagues SET status = %s WHERE league_id = %s
             """, (status.value, league_id))
             
             if cursor.rowcount > 0:
@@ -205,7 +224,7 @@ class LeagueRepository:
             # Check if user is already a member
             cursor.execute("""
                 SELECT 1 FROM league_members 
-                WHERE league_id = ? AND user_id = ?
+                WHERE league_id = %s AND user_id = %s
             """, (league_id, user_id))
             
             if cursor.fetchone():
@@ -214,17 +233,17 @@ class LeagueRepository:
             
             # Check if league is full
             cursor.execute("""
-                SELECT COUNT(*) FROM league_members 
-                WHERE league_id = ? AND is_active = 1
+                SELECT COUNT(*) as count FROM league_members 
+                WHERE league_id = %s AND is_active = TRUE
             """, (league_id,))
             
-            current_members = cursor.fetchone()[0]
+            current_members = cursor.fetchone()['count']
             
             cursor.execute("""
-                SELECT max_members FROM leagues WHERE league_id = ?
+                SELECT max_members FROM leagues WHERE league_id = %s
             """, (league_id,))
             
-            max_members = cursor.fetchone()[0]
+            max_members = cursor.fetchone()['max_members']
             
             if current_members >= max_members:
                 self.logger.warning(f"League {league_id} is full")
@@ -233,7 +252,7 @@ class LeagueRepository:
             # Add member
             cursor.execute("""
                 INSERT INTO league_members (league_id, user_id, joined_at, is_active)
-                VALUES (?, ?, ?, 1)
+                VALUES (%s, %s, %s, TRUE)
             """, (league_id, user_id, datetime.now()))
             
             self.conn.commit()
@@ -252,8 +271,8 @@ class LeagueRepository:
             
             cursor.execute("""
                 UPDATE league_members 
-                SET is_active = 0 
-                WHERE league_id = ? AND user_id = ?
+                SET is_active = FALSE 
+                WHERE league_id = %s AND user_id = %s
             """, (league_id, user_id))
             
             if cursor.rowcount > 0:
@@ -275,15 +294,17 @@ class LeagueRepository:
             cursor.execute("""
                 SELECT league_id, user_id, joined_at, is_active
                 FROM league_members 
-                WHERE league_id = ? AND is_active = 1
+                WHERE league_id = %s AND is_active = TRUE
                 ORDER BY joined_at ASC
             """, (league_id,))
             
             members = []
             for row in cursor.fetchall():
                 member = LeagueMember(
-                    league_id=row[0], user_id=row[1],
-                    joined_at=row[2], is_active=bool(row[3])
+                    league_id=row['league_id'],
+                    user_id=row['user_id'],
+                    joined_at=row['joined_at'],
+                    is_active=bool(row['is_active'])
                 )
                 members.append(member)
             
@@ -303,22 +324,24 @@ class LeagueRepository:
                        l.start_date, l.end_date, l.daily_goal, l.max_members, l.status, l.created_at
                 FROM leagues l
                 JOIN league_members lm ON l.league_id = lm.league_id
-                WHERE lm.user_id = ? AND lm.is_active = 1
+                WHERE lm.user_id = %s AND lm.is_active = TRUE
                 ORDER BY l.created_at DESC
             """, (user_id,))
             
             leagues = []
             for row in cursor.fetchall():
-                # Convert string dates to date objects
-                start_date = date.fromisoformat(row[5]) if row[5] else None
-                end_date = date.fromisoformat(row[6]) if row[6] else None
-                created_at = datetime.fromisoformat(row[10]) if row[10] else datetime.now()
-                
                 league = League(
-                    league_id=row[0], name=row[1], description=row[2],
-                    admin_id=row[3], current_book_id=row[4], start_date=start_date,
-                    end_date=end_date, daily_goal=row[7], max_members=row[8],
-                    status=LeagueStatus(row[9]), created_at=created_at
+                    league_id=row['league_id'],
+                    name=row['name'],
+                    description=row['description'],
+                    admin_id=row['admin_id'],
+                    current_book_id=row['current_book_id'],
+                    start_date=row['start_date'],
+                    end_date=row['end_date'],
+                    daily_goal=row['daily_goal'],
+                    max_members=row['max_members'],
+                    status=LeagueStatus(row['status']),
+                    created_at=row['created_at']
                 )
                 leagues.append(league)
             
@@ -334,11 +357,11 @@ class LeagueRepository:
             cursor = self.conn.cursor()
             
             cursor.execute("""
-                SELECT COUNT(*) FROM league_members 
-                WHERE league_id = ? AND is_active = 1
+                SELECT COUNT(*) as count FROM league_members 
+                WHERE league_id = %s AND is_active = TRUE
             """, (league_id,))
             
-            return cursor.fetchone()[0]
+            return cursor.fetchone()['count']
             
         except Exception as e:
             self.logger.error(f"Failed to get league member count: {e}")
@@ -351,7 +374,7 @@ class LeagueRepository:
             
             cursor.execute("""
                 SELECT 1 FROM league_members 
-                WHERE league_id = ? AND user_id = ? AND is_active = 1
+                WHERE league_id = %s AND user_id = %s AND is_active = TRUE
             """, (league_id, user_id))
             
             return cursor.fetchone() is not None
@@ -363,7 +386,7 @@ class LeagueRepository:
     def update_goal(self, league_id: int, daily_goal: int) -> bool:
         try:
             cur = self.conn.cursor()
-            cur.execute("UPDATE leagues SET daily_goal = ? WHERE league_id = ?", (daily_goal, league_id))
+            cur.execute("UPDATE leagues SET daily_goal = %s WHERE league_id = %s", (daily_goal, league_id))
             self.conn.commit()
             return cur.rowcount > 0
         except Exception as e:
@@ -375,7 +398,7 @@ class LeagueRepository:
         try:
             cur = self.conn.cursor()
             cur.execute(
-                "UPDATE leagues SET start_date = ?, end_date = ? WHERE league_id = ?",
+                "UPDATE leagues SET start_date = %s, end_date = %s WHERE league_id = %s",
                 (start_date, end_date, league_id),
             )
             self.conn.commit()
@@ -388,7 +411,7 @@ class LeagueRepository:
     def update_max_members(self, league_id: int, max_members: int) -> bool:
         try:
             cur = self.conn.cursor()
-            cur.execute("UPDATE leagues SET max_members = ? WHERE league_id = ?", (max_members, league_id))
+            cur.execute("UPDATE leagues SET max_members = %s WHERE league_id = %s", (max_members, league_id))
             self.conn.commit()
             return cur.rowcount > 0
         except Exception as e:
@@ -399,7 +422,7 @@ class LeagueRepository:
     def update_book(self, league_id: int, book_id: int) -> bool:
         try:
             cur = self.conn.cursor()
-            cur.execute("UPDATE leagues SET current_book_id = ? WHERE league_id = ?", (book_id, league_id))
+            cur.execute("UPDATE leagues SET current_book_id = %s WHERE league_id = %s", (book_id, league_id))
             self.conn.commit()
             return cur.rowcount > 0
         except Exception as e:
@@ -418,7 +441,7 @@ class LeagueRepository:
                 JOIN users u ON u.user_id = lm.user_id
                 LEFT JOIN user_books ub ON ub.user_id = lm.user_id
                 LEFT JOIN books b ON b.book_id = ub.book_id
-                WHERE lm.league_id = ? AND lm.is_active = 1
+                WHERE lm.league_id = %s AND lm.is_active = TRUE
                 ORDER BY u.full_name
                 """,
                 (league_id,),
@@ -428,15 +451,15 @@ class LeagueRepository:
             for r in rows:
                 out.append(
                     {
-                        "full_name": r[0] or "",
+                        "full_name": r['full_name'] or "",
                         
-                        "city": r[2] or "",
-                        "book_title": r[3] or "",
-                        "book_author": r[4] or "",
-                        "total_pages": int(r[5] or 0),
-                        "pages_read": int(r[6] or 0),
-                        "start_date": str(r[7] or ""),
-                        "last_updated": str(r[8] or ""),
+                        "city": r['city'] or "",
+                        "book_title": r['title'] or "",
+                        "book_author": r['author'] or "",
+                        "total_pages": int(r['total_pages'] or 0),
+                        "pages_read": int(r['pages_read'] or 0),
+                        "start_date": str(r['start_date'] or ""),
+                        "last_updated": str(r['last_updated'] or ""),
                     }
                 )
             return out

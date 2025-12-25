@@ -262,7 +262,8 @@ class ReadingTrackerBot:
             self.application.add_handler(CallbackQueryHandler(self._handle_book_start, pattern="^book_start_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(self._handle_progress_select_book, pattern="^progress_select_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(self._handle_progress_quick_add, pattern=r"^progress_add_-?\d+$"))
-            self.application.add_handler(CallbackQueryHandler(self._handle_progress_submit, pattern=r"^progress_submit$"))
+            self.application.add_handler(CallbackQueryHandler(self._handle_progress_confirm_step, pattern=r"^progress_confirm_step$"))
+            self.application.add_handler(CallbackQueryHandler(self._handle_progress_execute, pattern=r"^progress_execute$"))
             self.application.add_handler(CallbackQueryHandler(self._handle_noop, pattern=r"^noop$"))
             
             # Achievement callbacks
@@ -365,7 +366,7 @@ class ReadingTrackerBot:
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(f"➕ +{goal}", callback_data=f"progress_add_{goal}"), InlineKeyboardButton("➕ +5", callback_data="progress_add_5"), InlineKeyboardButton("➕ +10", callback_data="progress_add_10")],
             [InlineKeyboardButton("➖", callback_data="progress_add_-1"), InlineKeyboardButton(f"{goal}", callback_data="noop"), InlineKeyboardButton("➕", callback_data="progress_add_1")],
-            [InlineKeyboardButton("Submit", callback_data="progress_submit"), back_button],
+            [InlineKeyboardButton("✅ Update Progress", callback_data="progress_confirm_step"), back_button],
         ])
         context.user_data['adjust_amount'] = goal
         await query.edit_message_text("Choose quick add, adjust counter, or enter pages (number):", reply_markup=keyboard)
@@ -397,42 +398,97 @@ class ReadingTrackerBot:
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"➕ +{self.book_service.get_user_daily_goal(query.from_user.id)}", callback_data=f"progress_add_{self.book_service.get_user_daily_goal(query.from_user.id)}"), InlineKeyboardButton("➕ +5", callback_data="progress_add_5"), InlineKeyboardButton("➕ +10", callback_data="progress_add_10")],
                 [InlineKeyboardButton("➖", callback_data="progress_add_-1"), InlineKeyboardButton(f"{new_val}", callback_data="noop"), InlineKeyboardButton("➕", callback_data="progress_add_1")],
-                [InlineKeyboardButton("Submit", callback_data="progress_submit"), back_button],
+                [InlineKeyboardButton("✅ Update Progress", callback_data="progress_confirm_step"), back_button],
             ])
             await query.edit_message_reply_markup(reply_markup=kb)
             return
+            
         try:
             amt = int(amt_str)
         except Exception:
             await query.edit_message_text("Invalid amount.")
             return
+            
         book_id = context.user_data.get('current_book_id')
         if not book_id:
             await query.edit_message_text("No book selected. Use /progress.")
             return
-        user_id = query.from_user.id
-        result = self.book_service.update_progress(user_id, book_id, amt)
-        if 'error' in result:
-            await query.edit_message_text(f"❌ {result['error']}")
-            return
-        bar = self._progress_bar(result['progress_percent'])
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 My Stats", callback_data="ind_stats"), InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
-        ])
-        msg = (
-            "📖 Progress Updated!\n\n"
-            f"➕ Added: {amt} pages\n"
-            f"📊 Total: {result['current_pages']}/{result['total_pages']} pages\n"
-            f"{bar} {result['progress_percent']}%\n"
-            f"📖 Remaining: {result['remaining_pages']} pages\n"
-        )
-        if result['is_completed']:
-            msg += "\n🎉 Congratulations! You've completed this book! Share your achievement with friends!"
-        await query.edit_message_text(msg, reply_markup=keyboard)
+            
+        # Instead of executing immediately, go to confirmation step
+        context.user_data['adjust_amount'] = amt
+        await self._handle_progress_confirm_step(update, context)
+        return
 
-    async def _handle_progress_submit(self, update, context):
+    async def _handle_progress_confirm_step(self, update, context):
+        """Show confirmation dialog before updating progress. Handles both callback queries and text messages."""
+        # Determine if this is a callback or a text message
+        is_callback = bool(update.callback_query)
+        user_id = update.effective_user.id
+        
+        if is_callback:
+            query = update.callback_query
+            await query.answer()
+            amt = int(context.user_data.get('adjust_amount', 0))
+        else:
+            # For text message, amount was just set in _handle_progress_number
+            amt = int(context.user_data.get('adjust_amount', 0))
+        
+        if amt <= 0:
+            msg_text = "Please enter or select a positive number of pages."
+            if is_callback:
+                await update.callback_query.edit_message_text(msg_text)
+            else:
+                await update.message.reply_text(msg_text)
+            return
+            
+        book_id = context.user_data.get('current_book_id')
+        if not book_id:
+            msg_text = "No book selected. Use /progress."
+            if is_callback:
+                await update.callback_query.edit_message_text(msg_text)
+            else:
+                await update.message.reply_text(msg_text)
+            return
+            
+        # Get book title
+        book_title = "current book"
+        try:
+            with self.book_service.db_manager.get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT title FROM books WHERE book_id = %s", (book_id,))
+                row = cur.fetchone()
+                if row:
+                    book_title = row['title']
+        except Exception:
+            pass
+            
+        confirmation_msg = (
+            f"📝 <b>Confirm Update</b>\n\n"
+            f"📖 <b>Book:</b> {book_title}\n"
+            f"➕ <b>Adding:</b> {amt} pages\n\n"
+        )
+        
+        if amt > 100:
+             confirmation_msg += "🤯 <b>Wow!</b> That's a lot of pages! Are you sure?\n\n"
+             
+        confirmation_msg += "Does this look correct?"
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Yes, I read this!", callback_data="progress_execute")],
+            [InlineKeyboardButton("✏️ Edit Amount", callback_data=f"progress_select_{book_id}")],
+        ])
+        
+        if is_callback:
+            await update.callback_query.edit_message_text(confirmation_msg, reply_markup=keyboard)
+        else:
+            await update.message.reply_text(confirmation_msg, reply_markup=keyboard)
+
+    async def _handle_progress_execute(self, update, context):
+        """Execute the progress update after confirmation."""
         query = update.callback_query
-        await query.answer()
+        # Small delay/toast to show action is happening
+        await query.answer("Updating progress...")
+        
         amt = int(context.user_data.get('adjust_amount', 0))
         self.logger.debug(f"progress submit pressed: {amt}")
         if amt <= 0:
@@ -559,105 +615,47 @@ class ReadingTrackerBot:
         except Exception:
             return
         
-        # Check if we're in registration flow
-        if context.user_data.get('reg_step') == 'phone':
-            # Route to registration handler
+        # 1. Check if we're in registration flow
+        if context.user_data.get('reg_step'):
             await self.user_handlers.handle_registration_text(update, context)
             return
         
-        # Check if we're in league creation flow
+        # 2. Check if we're in league creation flow
         if context.user_data.get('creating_league'):
-            # Route to league creation handlers
             await self.user_handlers._handle_league_creation_text(update, context)
             return
         
-        # Check if we're in add book flow
-        if context.user_data.get('add_book_step') == 'pages':
-            # Route to add book handler
+        # 3. Check if we're in admin add book flow
+        if context.user_data.get('adding_book'):
+            await self.admin_handlers.handle_book_addition(update, context)
+            return
+            
+        # 4. Check if we're in user custom book addition flow
+        if context.user_data.get('add_book_step'):
             await self.user_handlers.handle_registration_text(update, context)
             return
-        
+            
+        # 5. Check if we're in custom goal setting
+        if context.user_data.get('awaiting_goal_custom'):
+            await self.user_handlers.handle_registration_text(update, context)
+            return
+            
+        # 6. Check if we're editing a profile field
+        if context.user_data.get('editing_field'):
+            await self.user_handlers.handle_registration_text(update, context)
+            return
+
         book_id = context.user_data.get('current_book_id')
         if not book_id:
+            # If no other state matches and no book selected, ignore numeric input
             return
-        user_id = update.effective_user.id
-        result = self.book_service.update_progress(user_id, book_id, pages)
-        if 'error' in result:
-            await update.message.reply_text(f"❌ {result['error']}")
-            return
-
-        # Gamification: mirror submit flow for typed numbers
-        new_achievements = self.achievement_service.update_reading_progress(user_id, pages, book_id)
-
-        # League-specific achievements if in community context
-        league_id = context.user_data.get('current_league_id')
-        if league_id:
-            league_achievements = self.achievement_service.check_league_achievements(user_id, league_id, pages)
-            new_achievements.extend(league_achievements)
-            for achievement in league_achievements:
-                self.motivation_service.send_league_achievement_celebration(user_id, achievement, league_id)
-
-        # Build and send achievement notifications
-        achievement_messages = []
-        for achievement in new_achievements:
-            if 'streak' in achievement.type:
-                streak_days = achievement.metadata.get('streak', 0) if achievement.metadata else 0
-                message = self.motivation_service.send_streak_milestone_notification(user_id, streak_days)
-                if message:
-                    achievement_messages.append(message)
-            else:
-                message = self.motivation_service.send_achievement_celebration(user_id, achievement)
-                if message:
-                    achievement_messages.append(message)
-
-        # Progress celebration
-        book_title = result.get('book_title', 'Current Book')
-        progress_message = self.motivation_service.send_progress_celebration(user_id, pages, book_title)
-        for message in achievement_messages:
-            try:
-                await context.bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.HTML)
-            except Exception:
-                pass
-        if progress_message:
-            try:
-                await context.bot.send_message(chat_id=user_id, text=progress_message, parse_mode=ParseMode.HTML)
-            except Exception:
-                pass
-
-        # Context-aware navigation
-        is_community_mode = context.user_data.get('community_mode', False)
-        if league_id is not None or is_community_mode:
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 My Stats", callback_data="com_stats"), InlineKeyboardButton("🏆 Leaderboard", callback_data="com_leaderboard")],
-                [InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu"), InlineKeyboardButton("🏠 Community Menu", callback_data="mode_community")],
-            ])
-        else:
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 Stats & Achievements", callback_data="achievement_menu")],
-                [InlineKeyboardButton("🏠 Individual Menu", callback_data="mode_individual")],
-            ])
-
-        bar = self._progress_bar(result['progress_percent'])
-        stats = self.achievement_service.get_user_stats(user_id)
-        streak_display = self.visual_service.create_streak_display(stats.current_streak, stats.longest_streak) if stats else ""
-        level_display = self.visual_service.create_level_display(stats.level, stats.xp) if stats else ""
-
-        msg = (
-            "📖 Progress Updated!\n\n"
-            f"📚 Pages read today: {pages}\n"
-            f"📊 Total: {result['current_pages']}/{result['total_pages']} pages\n"
-            f"{bar} {result['progress_percent']}%\n"
-            f"📖 Remaining: {result['remaining_pages']} pages\n"
-        )
-        if stats:
-            msg += f"\n{streak_display}\n{level_display}\n"
-        if new_achievements:
-            msg += f"\n🎉 {len(new_achievements)} new achievement(s) unlocked!\n"
-            for achievement in new_achievements:
-                msg += f"🏆 {achievement.title}\n"
-        if result['is_completed']:
-            msg += "\n🎉 Congratulations! You've completed this book! Share your achievement with friends!"
-        await update.message.reply_text(msg, reply_markup=keyboard)
+        
+        # Store the amount
+        context.user_data['adjust_amount'] = pages
+        
+        # Trigger confirmation step directly
+        await self._handle_progress_confirm_step(update, context)
+        return
 
     def _progress_bar(self, percent: float, width: int = 10) -> str:
         filled = int(round((percent / 100.0) * width))

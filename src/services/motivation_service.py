@@ -332,7 +332,7 @@ class MotivationService:
                 
                 cursor.execute('''
                     INSERT INTO motivation_messages (user_id, message_type, content, metadata, sent_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                 ''', (user_id, message_type, content, 
                       json.dumps(metadata) if metadata else None, datetime.now()))
                 
@@ -351,14 +351,14 @@ class MotivationService:
                 
                 query = '''
                     SELECT * FROM motivation_messages 
-                    WHERE user_id = ?
+                    WHERE user_id = %s
                 '''
                 params = [user_id]
                 
                 if unread_only:
-                    query += ' AND is_read = 0'
+                    query += ' AND is_read = FALSE'
                 
-                query += ' ORDER BY sent_at DESC LIMIT ? OFFSET ?'
+                query += ' ORDER BY sent_at DESC LIMIT %s OFFSET %s'
                 params.extend([limit, offset])
                 
                 cursor.execute(query, params)
@@ -380,11 +380,11 @@ class MotivationService:
                 cursor = conn.cursor()
                 
                 cursor.execute('''
-                    SELECT COUNT(*) FROM motivation_messages 
-                    WHERE user_id = ?
+                    SELECT COUNT(*) as count FROM motivation_messages 
+                    WHERE user_id = %s
                 ''', (user_id,))
                 
-                return cursor.fetchone()[0]
+                return cursor.fetchone()['count']
                 
         except Exception as e:
             self.logger.error(f"Failed to get total message count for user {user_id}: {e}")
@@ -397,7 +397,7 @@ class MotivationService:
                 cursor = conn.cursor()
                 
                 cursor.execute('''
-                    UPDATE motivation_messages SET is_read = 1 WHERE id = ?
+                    UPDATE motivation_messages SET is_read = TRUE WHERE id = %s
                 ''', (message_id,))
                 
                 conn.commit()
@@ -414,11 +414,11 @@ class MotivationService:
                 cursor = conn.cursor()
                 
                 cursor.execute('''
-                    SELECT COUNT(*) FROM motivation_messages 
-                    WHERE user_id = ? AND is_read = 0
+                    SELECT COUNT(*) as count FROM motivation_messages 
+                    WHERE user_id = %s AND is_read = FALSE
                 ''', (user_id,))
                 
-                return cursor.fetchone()[0]
+                return cursor.fetchone()['count']
                 
         except Exception as e:
             self.logger.error(f"Failed to get unread message count for user {user_id}: {e}")
@@ -432,11 +432,11 @@ class MotivationService:
                 
                 cursor.execute('''
                     SELECT * FROM motivation_messages 
-                    WHERE user_id = ? 
-                    AND (metadata LIKE '%"league_id":' || ? || '%' OR message_type IN ('league_update', 'community_challenge'))
+                    WHERE user_id = %s 
+                    AND (metadata LIKE '%%"league_id":' || %s || '%%' OR message_type IN ('league_update', 'community_challenge'))
                     ORDER BY sent_at DESC 
-                    LIMIT ?
-                ''', (user_id, league_id, limit))
+                    LIMIT %s
+                ''', (user_id, str(league_id), limit))
                 
                 messages = []
                 for row in cursor.fetchall():
@@ -455,12 +455,12 @@ class MotivationService:
                 cursor = conn.cursor()
                 
                 cursor.execute('''
-                    SELECT COUNT(*) FROM motivation_messages 
-                    WHERE user_id = ? AND is_read = 0
-                    AND (metadata LIKE '%"league_id":' || ? || '%' OR message_type IN ('league_update', 'community_challenge'))
-                ''', (user_id, league_id))
+                    SELECT COUNT(*) as count FROM motivation_messages 
+                    WHERE user_id = %s AND is_read = FALSE
+                    AND (metadata LIKE '%%"league_id":' || %s || '%%' OR message_type IN ('league_update', 'community_challenge'))
+                ''', (user_id, str(league_id)))
                 
-                return cursor.fetchone()[0]
+                return cursor.fetchone()['count']
                 
         except Exception as e:
             self.logger.error(f"Failed to get unread community message count for user {user_id}, league {league_id}: {e}")

@@ -126,22 +126,27 @@ class AdminLeagueHandlers:
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
                 # Get total count
-                cur.execute("SELECT COUNT(*) FROM books")
-                total_books = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM books")
+                total_books = cur.fetchone()['count']
                 
                 # Get books for current page
                 cur.execute("""
                     SELECT book_id, title, author, total_pages 
                     FROM books 
                     ORDER BY book_id DESC 
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 """, (books_per_page, offset))
                 books = cur.fetchall()
             
             if not books and page == 0:
-                await update.message.reply_text(
-                    "❌ No books available. Please add some books first using the admin panel."
-                )
+                if update.callback_query:
+                    await update.callback_query.edit_message_text(
+                        "❌ No books available. Please add some books first using the admin panel."
+                    )
+                else:
+                    await update.message.reply_text(
+                        "❌ No books available. Please add some books first using the admin panel."
+                    )
                 return
             
             # Pagination settings
@@ -169,16 +174,25 @@ class AdminLeagueHandlers:
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await update.message.reply_text(
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            msg_text = (
                 f"📚 <b>Select a book for this league:</b>\n\n"
                 f"Page {page + 1} of {total_pages}\n"
-                f"Choose from the available books below:",
-                reply_markup=reply_markup
+                f"Choose from the available books below:"
             )
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(msg_text, reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(msg_text, reply_markup=reply_markup)
             
         except Exception as e:
             self.logger.error(f"Failed to show available books: {e}")
-            await update.message.reply_text("❌ Failed to load available books")
+            if update.callback_query:
+                await update.callback_query.edit_message_text("❌ Failed to load available books")
+            else:
+                await update.message.reply_text("❌ Failed to load available books")
     
     async def handle_league_book_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle league book selection from inline keyboard."""
@@ -212,7 +226,7 @@ class AdminLeagueHandlers:
                     cur.execute("""
                         SELECT book_id, title, author, total_pages 
                         FROM books 
-                        WHERE book_id = ?
+                        WHERE book_id = %s
                     """, (book_id,))
                     book = cur.fetchone()
                 
@@ -239,7 +253,10 @@ class AdminLeagueHandlers:
             
         except Exception as e:
             self.logger.error(f"Failed to process league book selection: {e}")
-            await update.message.reply_text("❌ Failed to process book selection")
+            if update.callback_query:
+                await update.callback_query.edit_message_text("❌ Failed to process book selection")
+            else:
+                await update.message.reply_text("❌ Failed to process book selection")
     
     async def handle_league_confirmation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle league confirmation from inline keyboard."""

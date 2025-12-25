@@ -27,7 +27,7 @@ class AchievementService:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT * FROM user_stats WHERE user_id = ?
+                    SELECT * FROM user_stats WHERE user_id = %s
                 ''', (user_id,))
                 
                 row = cursor.fetchone()
@@ -50,7 +50,7 @@ class AchievementService:
                 
                 cursor.execute('''
                     INSERT INTO user_stats (user_id, created_at, updated_at)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                 ''', (user_id, now, now))
                 
                 conn.commit()
@@ -83,10 +83,10 @@ class AchievementService:
                 # Update database
                 cursor.execute('''
                     UPDATE user_stats SET
-                        current_streak = ?, longest_streak = ?, total_achievements = ?,
-                        level = ?, xp = ?, books_completed = ?, total_pages_read = ?,
-                        last_reading_date = ?, streak_start_date = ?, updated_at = ?
-                    WHERE user_id = ?
+                        current_streak = %s, longest_streak = %s, total_achievements = %s,
+                        level = %s, xp = %s, books_completed = %s, total_pages_read = %s,
+                        last_reading_date = %s, streak_start_date = %s, updated_at = %s
+                    WHERE user_id = %s
                 ''', (
                     current_stats.current_streak,
                     current_stats.longest_streak,
@@ -156,8 +156,17 @@ class AchievementService:
             page_achievements = self._check_page_achievements(user_id, stats.total_pages_read)
             new_achievements.extend(page_achievements)
             
-            # Check for daily reading achievements
-            daily_achievements = self._check_daily_achievements(user_id, pages_read)
+            # Award base XP for reading activity (1 XP per page)
+            # This ensures users always get some progress even without hitting milestones
+            base_xp = pages_read
+            stats.xp += base_xp
+            
+            # Calculate total pages read TODAY across all books/sessions
+            # This ensures daily achievements work cumulatively
+            total_daily_pages = self._get_daily_pages_read(user_id)
+            
+            # Check for daily reading achievements using cumulative total
+            daily_achievements = self._check_daily_achievements(user_id, total_daily_pages)
             new_achievements.extend(daily_achievements)
             
             # Check for book completion achievements
@@ -252,7 +261,7 @@ class AchievementService:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT * FROM achievement_definitions WHERE type = ?
+                    SELECT * FROM achievement_definitions WHERE type = %s
                 ''', (achievement_type,))
                 
                 result = cursor.fetchone()
@@ -342,24 +351,26 @@ class AchievementService:
                     SELECT ub.pages_read, b.total_pages, ub.status
                     FROM user_books ub
                     JOIN books b ON b.book_id = ub.book_id
-                    WHERE ub.user_id = ? AND ub.book_id = ?
+                    WHERE ub.user_id = %s AND ub.book_id = %s
                 ''', (user_id, book_id))
                 
                 row = cursor.fetchone()
                 if not row:
                     return achievements
                 
-                pages_read, total_pages, status = row
+                pages_read = row['pages_read']
+                total_pages = row['total_pages']
+                status = row['status']
                 
                 # Check if book is completed
                 if status == 'completed' and pages_read >= total_pages:
                     # Get total completed books count
                     cursor.execute('''
-                        SELECT COUNT(*) FROM user_books 
-                        WHERE user_id = ? AND status = 'completed'
+                        SELECT COUNT(*) as count FROM user_books 
+                        WHERE user_id = %s AND status = 'completed'
                     ''', (user_id,))
                     
-                    completed_count = cursor.fetchone()[0]
+                    completed_count = cursor.fetchone()['count']
                     
                     # Check for first book achievement
                     if completed_count == 1 and not self._has_achievement(user_id, 'first_book'):
@@ -422,14 +433,32 @@ class AchievementService:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT COUNT(*) FROM user_books 
-                    WHERE user_id = ? AND status = 'completed'
+                    SELECT COUNT(*) as count FROM user_books 
+                    WHERE user_id = %s AND status = 'completed'
                 ''', (user_id,))
                 
-                return cursor.fetchone()[0]
+                return cursor.fetchone()['count']
                 
         except Exception as e:
             self.logger.error(f"Failed to get completed books count for user {user_id}: {e}")
+            return 0
+            
+    def _get_daily_pages_read(self, user_id: int) -> int:
+        """Get total pages read by user today across all books."""
+        try:
+            today = date.today()
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT SUM(pages_read) as sum FROM reading_sessions 
+                    WHERE user_id = %s AND session_date = %s
+                ''', (user_id, today))
+                
+                result = cursor.fetchone()
+                return result['sum'] if result and result['sum'] else 0
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get daily pages read for user {user_id}: {e}")
             return 0
     
     def _has_achievement(self, user_id: int, achievement_type: str) -> bool:
@@ -438,11 +467,11 @@ class AchievementService:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT COUNT(*) FROM achievements 
-                    WHERE user_id = ? AND type = ?
+                    SELECT COUNT(*) as count FROM achievements 
+                    WHERE user_id = %s AND type = %s
                 ''', (user_id, achievement_type))
                 
-                return cursor.fetchone()[0] > 0
+                return cursor.fetchone()['count'] > 0
                 
         except Exception as e:
             self.logger.error(f"Failed to check achievement for user {user_id}: {e}")
@@ -457,22 +486,23 @@ class AchievementService:
                 
                 # Get achievement definition for XP reward
                 cursor.execute('''
-                    SELECT xp_reward FROM achievement_definitions WHERE type = ?
+                    SELECT xp_reward FROM achievement_definitions WHERE type = %s
                 ''', (achievement_type,))
                 
                 definition = cursor.fetchone()
                 if definition:
-                    metadata['xp_reward'] = definition[0]
+                    metadata['xp_reward'] = definition['xp_reward']
                 
                 cursor.execute('''
                     INSERT INTO achievements (user_id, type, title, description, metadata, earned_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
                 ''', (user_id, achievement_type, title, description, json.dumps(metadata), datetime.now()))
                 
                 conn.commit()
                 
                 return Achievement(
-                    id=cursor.lastrowid,
+                    id=cursor.fetchone()['id'],
                     user_id=user_id,
                     type=achievement_type,
                     title=title,
@@ -497,9 +527,9 @@ class AchievementService:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT * FROM achievements 
-                    WHERE user_id = ? 
+                    WHERE user_id = %s 
                     ORDER BY earned_at DESC 
-                    LIMIT ?
+                    LIMIT %s
                 ''', (user_id, limit))
                 
                 achievements = []
@@ -518,12 +548,12 @@ class AchievementService:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT COUNT(*) FROM achievements 
-                    WHERE user_id = ?
+                    SELECT COUNT(*) as count FROM achievements 
+                    WHERE user_id = %s
                 ''', (user_id,))
                 
                 result = cursor.fetchone()
-                return result[0] if result else 0
+                return result['count'] if result else 0
                 
         except Exception as e:
             self.logger.error(f"Failed to get achievement count for user {user_id}: {e}")
@@ -558,14 +588,14 @@ class AchievementService:
                 
                 # Get league's current book
                 cursor.execute('''
-                    SELECT current_book_id FROM leagues WHERE league_id = ?
+                    SELECT current_book_id FROM leagues WHERE league_id = %s
                 ''', (league_id,))
                 
                 league_result = cursor.fetchone()
                 if not league_result:
                     return None
                 
-                current_book_id = league_result[0]
+                current_book_id = league_result['current_book_id']
                 if not current_book_id:
                     return None
                 
@@ -575,24 +605,25 @@ class AchievementService:
                         CASE WHEN ub.pages_read >= b.total_pages THEN 1 ELSE 0 END as books_completed,
                         COALESCE(ub.pages_read, 0) as pages_read
                     FROM books b
-                    LEFT JOIN user_books ub ON ub.book_id = b.book_id AND ub.user_id = ?
-                    WHERE b.book_id = ?
+                    LEFT JOIN user_books ub ON ub.book_id = b.book_id AND ub.user_id = %s
+                    WHERE b.book_id = %s
                 ''', (user_id, current_book_id))
                 
                 book_result = cursor.fetchone()
-                books_completed = book_result[0] if book_result else 0
-                pages_read = book_result[1] if book_result else 0
+                books_completed = book_result['books_completed'] if book_result else 0
+                pages_read = book_result['pages_read'] if book_result else 0
                 
                 # Get league-specific achievements
+                # Note: Postgres LIKE ||
                 cursor.execute('''
                     SELECT COUNT(*) as achievements
                     FROM achievements 
-                    WHERE user_id = ? 
-                    AND (metadata LIKE '%"league_id":' || ? || '%' OR type IN ('community_contributor', 'league_champion'))
+                    WHERE user_id = %s 
+                    AND (metadata LIKE '%%"league_id":' || %s || '%%' OR type IN ('community_contributor', 'league_champion'))
                 ''', (user_id, league_id))
                 
                 achievements_result = cursor.fetchone()
-                achievements = achievements_result[0] if achievements_result else 0
+                achievements = achievements_result['achievements'] if achievements_result else 0
                 
                 # Get user's position in league (based on pages read on current book)
                 cursor.execute('''
@@ -600,14 +631,14 @@ class AchievementService:
                     FROM (
                         SELECT ub.user_id, COALESCE(ub.pages_read, 0) as total_pages
                         FROM user_books ub
-                        WHERE ub.book_id = ?
+                        WHERE ub.book_id = %s
                         GROUP BY ub.user_id
-                        HAVING total_pages > ?
-                    )
+                        HAVING total_pages > %s
+                    ) as subquery
                 ''', (current_book_id, pages_read))
                 
                 position_result = cursor.fetchone()
-                position = position_result[0] if position_result else 1
+                position = position_result['position'] if position_result else 1
                 
                 return {
                     'books_completed': books_completed,
@@ -627,10 +658,10 @@ class AchievementService:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT * FROM achievements 
-                    WHERE user_id = ? 
-                    AND (metadata LIKE '%"league_id":' || ? || '%' OR type IN ('community_contributor', 'league_champion'))
+                    WHERE user_id = %s 
+                    AND (metadata LIKE '%%"league_id":' || %s || '%%' OR type IN ('community_contributor', 'league_champion'))
                     ORDER BY earned_at DESC 
-                    LIMIT ?
+                    LIMIT %s
                 ''', (user_id, league_id, limit))
                 
                 achievements = []
@@ -648,10 +679,10 @@ class AchievementService:
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT name FROM leagues WHERE league_id = ?', (league_id,))
+                cursor.execute('SELECT name FROM leagues WHERE league_id = %s', (league_id,))
                 
                 result = cursor.fetchone()
-                return result[0] if result else "Unknown League"
+                return result['name'] if result else "Unknown League"
                 
         except Exception as e:
             self.logger.error(f"Failed to get league name for league {league_id}: {e}")

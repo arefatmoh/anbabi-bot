@@ -214,7 +214,7 @@ class LeagueService:
                     JOIN users u ON u.user_id = lm.user_id
                     JOIN user_books ub ON ub.user_id = lm.user_id
                     JOIN books b ON b.book_id = ub.book_id
-                    WHERE lm.league_id = ? AND lm.is_active = 1
+                    WHERE lm.league_id = %s AND lm.is_active = TRUE
                     ORDER BY pct DESC, ub.pages_read DESC
                     """,
                     (league_id,),
@@ -226,13 +226,13 @@ class LeagueService:
                     leaderboard.append(
                         {
                             "rank": rank,
-                            "full_name": r[0] or "",
+                            "full_name": r['full_name'] or "",
                             
-                            "user_id": r[2],
-                            "book_title": r[3],
-                            "pages_read": int(r[4] or 0),
-                            "total_pages": int(r[5] or 0),
-                            "progress_percent": float(r[6] or 0.0),
+                            "user_id": r['user_id'],
+                            "book_title": r['title'],
+                            "pages_read": int(r['pages_read'] or 0),
+                            "total_pages": int(r['total_pages'] or 0),
+                            "progress_percent": float(r['pct'] or 0.0),
                         }
                     )
                     rank += 1

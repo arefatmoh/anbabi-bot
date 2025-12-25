@@ -28,18 +28,17 @@ class ProfileService:
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
+                cur.execute('''
                     SELECT user_id, full_name, nickname, bio, reading_goal_pages_per_day,
                            preferred_reading_time, favorite_genres, reading_level, privacy_level,
                            show_achievements, show_reading_stats, registration_date
-                    FROM users WHERE user_id = ?
+                    FROM users WHERE user_id = %s
                 ''', (user_id,))
                 
-                row = cursor.fetchone()
+                row = cur.fetchone()
                 if row:
-                    # Convert row to dictionary
-                    columns = [desc[0] for desc in cursor.description]
-                    data = dict(zip(columns, row))
+                    # Row is already a dict-like object with RealDictCursor
+                    data = dict(row)
                     
                     # Handle None values and defaults - simplified fields
                     data['display_name'] = data.get('full_name', '')  # Use full_name as display_name
@@ -69,11 +68,11 @@ class ProfileService:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE users SET
-                        full_name = ?, nickname = ?, bio = ?, reading_goal_pages_per_day = ?,
-                        preferred_reading_time = ?, favorite_genres = ?, reading_level = ?,
-                        privacy_level = ?, show_achievements = ?, show_reading_stats = ?,
-                        last_activity = ?
-                    WHERE user_id = ?
+                        full_name = %s, nickname = %s, bio = %s, reading_goal_pages_per_day = %s,
+                        preferred_reading_time = %s, favorite_genres = %s, reading_level = %s,
+                        privacy_level = %s, show_achievements = %s, show_reading_stats = %s,
+                        last_activity = %s
+                    WHERE user_id = %s
                 ''', (
                     profile.display_name, profile.nickname, profile.bio, 
                     profile.reading_goal_pages_per_day, profile.preferred_reading_time,
@@ -113,8 +112,8 @@ class ProfileService:
                 
                 db_field = field_mapping[field]
                 cursor.execute(f'''
-                    UPDATE users SET {db_field} = ?, last_activity = ?
-                    WHERE user_id = ?
+                    UPDATE users SET {db_field} = %s, last_activity = %s
+                    WHERE user_id = %s
                 ''', (value, datetime.now(), user_id))
                 conn.commit()
                 return True
@@ -129,22 +128,34 @@ class ProfileService:
                 cursor = conn.cursor()
                 
                 # Get basic user stats
+                # Get basic user stats
                 cursor.execute('''
                     SELECT current_streak, longest_streak, total_achievements, level, xp,
                            books_completed, total_pages_read, last_reading_date, streak_start_date
-                    FROM user_stats WHERE user_id = ?
+                    FROM user_stats WHERE user_id = %s
                 ''', (user_id,))
                 
                 stats_row = cursor.fetchone()
                 if not stats_row:
                     return None
                 
-                current_streak, longest_streak, total_achievements, level, xp, books_completed, total_pages_read, last_reading_date, streak_start_date = stats_row
+                current_streak = stats_row['current_streak']
+                longest_streak = stats_row['longest_streak']
+                total_achievements = stats_row['total_achievements']
+                level = stats_row['level']
+                xp = stats_row['xp']
+                books_completed = stats_row['books_completed']
+                total_pages_read = stats_row['total_pages_read']
+                last_reading_date = stats_row['last_reading_date']
+                streak_start_date = stats_row['streak_start_date']
                 
                 # Get user join date
-                cursor.execute('SELECT registration_date FROM users WHERE user_id = ?', (user_id,))
+                cursor.execute('SELECT registration_date FROM users WHERE user_id = %s', (user_id,))
                 join_row = cursor.fetchone()
-                join_date = datetime.fromisoformat(join_row[0]) if join_row and join_row[0] else datetime.now()
+                join_date = join_row['registration_date'] if join_row and join_row['registration_date'] else datetime.now()
+                # Ensure join_date is datetime object (Psycopg2 returns datetime, SQLite returns str)
+                if isinstance(join_date, str):
+                     join_date = datetime.fromisoformat(join_date)
                 
                 # Calculate days since join
                 days_since_join = max(1, (datetime.now() - join_date).days)
@@ -153,7 +164,7 @@ class ProfileService:
                 cursor.execute('''
                     SELECT session_date, pages_read, reading_time_minutes
                     FROM reading_sessions 
-                    WHERE user_id = ? AND session_date IS NOT NULL
+                    WHERE user_id = %s AND session_date IS NOT NULL
                     ORDER BY session_date
                 ''', (user_id,))
                 
@@ -165,7 +176,8 @@ class ProfileService:
                 average_pages_per_book = total_pages_read / books_completed if books_completed > 0 else 0
                 
                 # Calculate reading speed (pages per hour)
-                total_reading_time = sum(session[2] for session in sessions if session[2])
+                # session is a dict now
+                total_reading_time = sum(session['reading_time_minutes'] for session in sessions if session['reading_time_minutes'])
                 reading_speed_pages_per_hour = (total_pages_read / (total_reading_time / 60)) if total_reading_time > 0 else 0
                 
                 # Find favorite reading day and time
@@ -173,12 +185,18 @@ class ProfileService:
                 time_counts = defaultdict(int)
                 
                 for session in sessions:
-                    if session[0]:  # session_date
+                    if session['session_date']:  # session_date
                         try:
-                            session_date = datetime.fromisoformat(session[0]).date()
+                            # Handle both date object and string
+                            s_date = session['session_date']
+                            if isinstance(s_date, str):
+                                session_date = datetime.fromisoformat(s_date).date()
+                            else:
+                                session_date = s_date if isinstance(s_date, date) else s_date.date()
+                                
                             day_name = session_date.strftime('%A')
                             day_counts[day_name] += 1
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError, AttributeError):
                             pass
                 
                 favorite_reading_day = max(day_counts.items(), key=lambda x: x[1])[0] if day_counts else "Monday"
@@ -187,12 +205,17 @@ class ProfileService:
                 # Find most productive month
                 month_counts = defaultdict(int)
                 for session in sessions:
-                    if session[0]:
+                    if session['session_date']:
                         try:
-                            session_date = datetime.fromisoformat(session[0])
+                            s_date = session['session_date']
+                            if isinstance(s_date, str):
+                                session_date = datetime.fromisoformat(s_date)
+                            else:
+                                session_date = s_date
+                            
                             month_name = session_date.strftime('%B')
-                            month_counts[month_name] += session[1] if session[1] else 0
-                        except (ValueError, TypeError):
+                            month_counts[month_name] += session['pages_read'] if session['pages_read'] else 0
+                        except (ValueError, TypeError, AttributeError):
                             pass
                 
                 most_productive_month = max(month_counts.items(), key=lambda x: x[1])[0] if month_counts else "January"
@@ -207,14 +230,20 @@ class ProfileService:
                 last_reading_date_parsed = None
                 if last_reading_date:
                     try:
-                        last_reading_date_parsed = datetime.fromisoformat(last_reading_date).date()
+                        if isinstance(last_reading_date, str):
+                            last_reading_date_parsed = datetime.fromisoformat(last_reading_date).date()
+                        elif isinstance(last_reading_date, (datetime, date)):
+                            last_reading_date_parsed = last_reading_date if isinstance(last_reading_date, date) else last_reading_date.date()
                     except (ValueError, TypeError):
                         pass
                 
                 streak_start_date_parsed = None
                 if streak_start_date:
                     try:
-                        streak_start_date_parsed = datetime.fromisoformat(streak_start_date).date()
+                        if isinstance(streak_start_date, str):
+                            streak_start_date_parsed = datetime.fromisoformat(streak_start_date).date()
+                        elif isinstance(streak_start_date, (datetime, date)):
+                             streak_start_date_parsed = streak_start_date if isinstance(streak_start_date, date) else streak_start_date.date()
                     except (ValueError, TypeError):
                         pass
                 
@@ -235,7 +264,7 @@ class ProfileService:
                     level=level,
                     xp=xp,
                     total_achievements=total_achievements,
-                    join_date=join_date.date(),
+                    join_date=join_date.date() if isinstance(join_date, datetime) else join_date,
                     last_reading_date=last_reading_date_parsed,
                     streak_start_date=streak_start_date_parsed
                 )
@@ -294,11 +323,13 @@ class ProfileService:
                 cursor = conn.cursor()
                 
                 # Get basic user info from users table
-                cursor.execute('SELECT full_name, nickname, daily_goal FROM users WHERE user_id = ?', (user_id,))
+                cursor.execute('SELECT full_name, nickname, daily_goal FROM users WHERE user_id = %s', (user_id,))
                 user_row = cursor.fetchone()
                 
                 if user_row:
-                    full_name, nickname, daily_goal = user_row
+                    full_name = user_row.get('full_name')
+                    nickname = user_row.get('nickname')
+                    daily_goal = user_row.get('daily_goal')
                     
                     # Create profile with data from users table
                     profile = UserProfile(
@@ -320,11 +351,11 @@ class ProfileService:
                     # Save the profile to users table (simplified fields)
                     cursor.execute('''
                         UPDATE users SET
-                            full_name = ?, nickname = ?, bio = ?, reading_goal_pages_per_day = ?,
-                            preferred_reading_time = ?, favorite_genres = ?, reading_level = ?,
-                            privacy_level = ?, show_achievements = ?, show_reading_stats = ?,
-                            last_activity = ?
-                        WHERE user_id = ?
+                            full_name = %s, nickname = %s, bio = %s, reading_goal_pages_per_day = %s,
+                            preferred_reading_time = %s, favorite_genres = %s, reading_level = %s,
+                            privacy_level = %s, show_achievements = %s, show_reading_stats = %s,
+                            last_activity = %s
+                        WHERE user_id = %s
                     ''', (
                         profile.display_name, profile.nickname, profile.bio,
                         profile.reading_goal_pages_per_day, profile.preferred_reading_time,

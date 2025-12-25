@@ -93,11 +93,11 @@ class VisualService:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT icon FROM achievement_definitions WHERE type = ?
+                    SELECT icon FROM achievement_definitions WHERE type = %s
                 ''', (achievement.type,))
                 
                 result = cursor.fetchone()
-                icon = result[0] if result else "🏆"
+                icon = result['icon'] if result else "🏆"
             
             badge = f"{icon} {achievement.title}"
             if achievement.metadata and 'xp_reward' in achievement.metadata:
@@ -165,11 +165,11 @@ class VisualService:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT icon FROM achievement_definitions WHERE type = ?
+                    SELECT icon FROM achievement_definitions WHERE type = %s
                 ''', (achievement.type,))
                 
                 result = cursor.fetchone()
-                icon = result[0] if result else "🏆"
+                icon = result['icon'] if result else "🏆"
             
             display = f"🎉 ACHIEVEMENT UNLOCKED! 🎉\n\n"
             display += f"{icon} {achievement.title}\n"
@@ -267,7 +267,7 @@ class VisualService:
                 
                 cursor.execute('''
                     INSERT INTO visual_elements (user_id, element_type, data, created_at, expires_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                 ''', (user_id, element_type, data, datetime.now(), expires_at))
                 
                 conn.commit()
@@ -286,15 +286,15 @@ class VisualService:
                 
                 query = '''
                     SELECT * FROM visual_elements 
-                    WHERE user_id = ? AND is_active = 1
+                    WHERE user_id = %s AND is_active = TRUE
                 '''
                 params = [user_id]
                 
                 if element_type:
-                    query += ' AND element_type = ?'
+                    query += ' AND element_type = %s'
                     params.append(element_type)
                 
-                query += ' ORDER BY created_at DESC LIMIT ?'
+                query += ' ORDER BY created_at DESC LIMIT %s'
                 params.append(limit)
                 
                 cursor.execute(query, params)

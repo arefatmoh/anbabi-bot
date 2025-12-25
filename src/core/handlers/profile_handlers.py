@@ -444,9 +444,9 @@ class ProfileHandlers:
         try:
             with self.profile_service.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT contact FROM users WHERE user_id = ?', (user_id,))
+                cursor.execute('SELECT contact FROM users WHERE user_id = %s', (user_id,))
                 result = cursor.fetchone()
-                return result[0] if result and result[0] else ""
+                return result['contact'] if result and result['contact'] else ""
         except Exception as e:
             self.logger.error(f"Failed to get user phone for {user_id}: {e}")
             return ""

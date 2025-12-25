@@ -13,12 +13,12 @@ class BookService:
     def get_user_daily_goal(self, user_id: int) -> int:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT daily_goal FROM users WHERE user_id = ?", (user_id,))
+            cur.execute("SELECT daily_goal FROM users WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
-            if not row or row[0] is None:
+            if not row or row['daily_goal'] is None:
                 return 20
             try:
-                return int(row[0])
+                return int(row['daily_goal'])
             except Exception:
                 return 20
 
@@ -28,7 +28,7 @@ class BookService:
             cur.execute(
                 """
                 INSERT INTO users (user_id, daily_goal, full_name, city, contact)
-                VALUES (?, ?, '', '', '')
+                VALUES (%s, %s, '', '', '')
                 ON CONFLICT(user_id) DO UPDATE SET daily_goal = excluded.daily_goal
                 """,
                 (user_id, pages_per_day),
@@ -41,17 +41,17 @@ class BookService:
             cur.execute(
                 """
                 SELECT book_id, title, author, total_pages
-                FROM books WHERE is_featured = 1
+                FROM books WHERE is_featured = TRUE
                 ORDER BY book_id
                 """
             )
             rows = cur.fetchall()
             return [
                 {
-                    "book_id": r[0],
-                    "title": r[1],
-                    "author": r[2],
-                    "total_pages": r[3],
+                    "book_id": r['book_id'],
+                    "title": r['title'],
+                    "author": r['author'],
+                    "total_pages": r['total_pages'],
                 }
                 for r in rows
             ]
@@ -63,16 +63,17 @@ class BookService:
             cur.execute(
                 """
                 INSERT INTO books (title, author, total_pages, category, description, cover_image, is_featured, created_by)
-                VALUES (?, ?, ?, '', '', '', 0, ?)
+                VALUES (%s, %s, %s, '', '', '', FALSE, %s)
+                RETURNING book_id
                 """,
                 (title, author, total_pages, user_id),
             )
-            book_id = cur.lastrowid
+            book_id = cur.fetchone()['book_id'] # Postgres RETURNING
             # Start reading for user
             cur.execute(
                 """
                 INSERT INTO user_books (user_id, book_id, start_date, pages_read, status)
-                VALUES (?, ?, CURRENT_TIMESTAMP, 0, 'active')
+                VALUES (%s, %s, CURRENT_TIMESTAMP, 0, 'active')
                 """,
                 (user_id, book_id),
             )
@@ -86,7 +87,7 @@ class BookService:
             cur.execute(
                 """
                 SELECT 1 FROM user_books
-                WHERE user_id = ? AND book_id = ? AND status = 'active'
+                WHERE user_id = %s AND book_id = %s AND status = 'active'
                 """,
                 (user_id, book_id),
             )
@@ -95,7 +96,7 @@ class BookService:
             cur.execute(
                 """
                 INSERT INTO user_books (user_id, book_id, start_date, pages_read, status)
-                VALUES (?, ?, CURRENT_TIMESTAMP, 0, 'active')
+                VALUES (%s, %s, CURRENT_TIMESTAMP, 0, 'active')
                 """,
                 (user_id, book_id),
             )
@@ -110,7 +111,7 @@ class BookService:
                 SELECT ub.book_id, b.title, b.author, b.total_pages, ub.pages_read, ub.start_date
                 FROM user_books ub
                 JOIN books b ON b.book_id = ub.book_id
-                WHERE ub.user_id = ? AND ub.status = 'active'
+                WHERE ub.user_id = %s AND ub.status = 'active'
                 ORDER BY ub.start_date DESC
                 """,
                 (user_id,),
@@ -118,15 +119,18 @@ class BookService:
             rows = cur.fetchall()
             result: List[Dict] = []
             for r in rows:
-                progress = round((r[4] / r[3]) * 100, 1) if r[3] else 0.0
+                # With RealDictCursor, access by key
+                pages_read = r['pages_read']
+                total_pages = r['total_pages']
+                progress = round((pages_read / total_pages) * 100, 1) if pages_read else 0.0
                 result.append(
                     {
-                        "book_id": r[0],
-                        "title": r[1],
-                        "author": r[2],
-                        "total_pages": r[3],
-                        "pages_read": r[4],
-                        "start_date": r[5],
+                        "book_id": r['book_id'],
+                        "title": r['title'],
+                        "author": r['author'],
+                        "total_pages": total_pages,
+                        "pages_read": pages_read,
+                        "start_date": r['start_date'],
                         "progress_percent": progress,
                     }
                 )
@@ -141,7 +145,7 @@ class BookService:
                 SELECT ub.book_id, b.title, b.author, b.total_pages, ub.pages_read, ub.status
                 FROM user_books ub
                 JOIN books b ON b.book_id = ub.book_id
-                WHERE ub.user_id = ?
+                WHERE ub.user_id = %s
                 ORDER BY CASE ub.status WHEN 'active' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END, ub.start_date DESC
                 """,
                 (user_id,),
@@ -149,15 +153,15 @@ class BookService:
             rows = cur.fetchall()
             result: List[Dict] = []
             for r in rows:
-                label = "Completed" if r[5] == 'completed' else f"{int(r[4] or 0)}/{int(r[3] or 0)}"
+                label = "Completed" if r['status'] == 'completed' else f"{int(r['pages_read'] or 0)}/{int(r['total_pages'] or 0)}"
                 result.append(
                     {
-                        "book_id": int(r[0]),
-                        "title": r[1],
-                        "author": r[2],
-                        "total_pages": int(r[3] or 0),
-                        "pages_read": int(r[4] or 0),
-                        "status": r[5],
+                        "book_id": int(r['book_id']),
+                        "title": r['title'],
+                        "author": r['author'],
+                        "total_pages": int(r['total_pages'] or 0),
+                        "pages_read": int(r['pages_read'] or 0),
+                        "status": r['status'],
                         "display_status": label,
                     }
                 )
@@ -169,35 +173,39 @@ class BookService:
             cur = conn.cursor()
             # Ensure ownership exists
             cur.execute(
-                "SELECT 1 FROM user_books WHERE user_id = ? AND book_id = ?",
+                "SELECT 1 FROM user_books WHERE user_id = %s AND book_id = %s",
                 (user_id, book_id),
             )
             if not cur.fetchone():
                 return False
             # Delete reading sessions for this user/book
             cur.execute(
-                "DELETE FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+                "DELETE FROM reading_sessions WHERE user_id = %s AND book_id = %s",
                 (user_id, book_id),
             )
             # Delete mapping
             cur.execute(
-                "DELETE FROM user_books WHERE user_id = ? AND book_id = ?",
+                "DELETE FROM user_books WHERE user_id = %s AND book_id = %s",
                 (user_id, book_id),
             )
             # If book is custom by this user and no one else uses it, delete it
             cur.execute(
-                "SELECT is_featured, created_by FROM books WHERE book_id = ?",
+                "SELECT is_featured, created_by FROM books WHERE book_id = %s",
                 (book_id,),
             )
             b = cur.fetchone()
-            if b and int(b[0] or 0) == 0 and int(b[1] or 0) == user_id:
+            # Postgres booleans
+            is_featured = b['is_featured'] if b else False
+            created_by = b['created_by'] if b else None
+            
+            if b and not is_featured and created_by == user_id:
                 cur.execute(
-                    "SELECT COUNT(*) FROM user_books WHERE book_id = ?",
+                    "SELECT COUNT(*) as count FROM user_books WHERE book_id = %s",
                     (book_id,),
                 )
-                cnt = int(cur.fetchone()[0] or 0)
+                cnt = int(cur.fetchone()['count'] or 0)
                 if cnt == 0:
-                    cur.execute("DELETE FROM books WHERE book_id = ?", (book_id,))
+                    cur.execute("DELETE FROM books WHERE book_id = %s", (book_id,))
             conn.commit()
             return True
 
@@ -205,18 +213,18 @@ class BookService:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
             # get total pages
-            cur.execute("SELECT total_pages FROM books WHERE book_id = ?", (book_id,))
+            cur.execute("SELECT total_pages FROM books WHERE book_id = %s", (book_id,))
             book = cur.fetchone()
             if not book:
                 return {"error": "Book not found"}
-            total_pages = int(book[0])
+            total_pages = int(book['total_pages'])
 
             # update total pages_read for user_books
             cur.execute(
                 """
                 UPDATE user_books
-                SET pages_read = pages_read + ?, last_updated = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND book_id = ? AND status = 'active'
+                SET pages_read = pages_read + %s, last_updated = CURRENT_TIMESTAMP
+                WHERE user_id = %s AND book_id = %s AND status = 'active'
                 """,
                 (pages_read, user_id, book_id),
             )
@@ -225,21 +233,21 @@ class BookService:
             cur.execute(
                 """
                 SELECT pages_read FROM user_books
-                WHERE user_id = ? AND book_id = ?
+                WHERE user_id = %s AND book_id = %s
                 """,
                 (user_id, book_id),
             )
             row = cur.fetchone()
             if not row:
                 return {"error": "Reading session not found"}
-            current_pages = int(row[0])
+            current_pages = int(row['pages_read'])
 
             # mark completed if needed
             is_completed = current_pages >= total_pages
             if is_completed:
                 cur.execute(
                     """
-                    UPDATE user_books SET status = 'completed' WHERE user_id = ? AND book_id = ?
+                    UPDATE user_books SET status = 'completed' WHERE user_id = %s AND book_id = %s
                     """,
                     (user_id, book_id),
                 )
@@ -248,7 +256,7 @@ class BookService:
             cur.execute(
                 """
                 INSERT INTO reading_sessions (user_id, book_id, league_id, session_date, pages_read)
-                VALUES (?, ?, NULL, ?, ?)
+                VALUES (%s, %s, NULL, %s, %s)
                 """,
                 (user_id, book_id, date.today(), pages_read),
             )
@@ -270,18 +278,18 @@ class BookService:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
             # get total pages
-            cur.execute("SELECT total_pages FROM books WHERE book_id = ?", (book_id,))
+            cur.execute("SELECT total_pages FROM books WHERE book_id = %s", (book_id,))
             book = cur.fetchone()
             if not book:
                 return {"error": "Book not found"}
-            total_pages = int(book[0])
+            total_pages = int(book['total_pages'])
 
             # update total pages_read for user_books
             cur.execute(
                 """
                 UPDATE user_books
-                SET pages_read = pages_read + ?, last_updated = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND book_id = ? AND status = 'active'
+                SET pages_read = pages_read + %s, last_updated = CURRENT_TIMESTAMP
+                WHERE user_id = %s AND book_id = %s AND status = 'active'
                 """,
                 (pages_read, user_id, book_id),
             )
@@ -290,21 +298,21 @@ class BookService:
             cur.execute(
                 """
                 SELECT pages_read FROM user_books
-                WHERE user_id = ? AND book_id = ?
+                WHERE user_id = %s AND book_id = %s
                 """,
                 (user_id, book_id),
             )
             row = cur.fetchone()
             if not row:
                 return {"error": "Reading session not found"}
-            current_pages = int(row[0])
+            current_pages = int(row['pages_read'])
 
             # mark completed if needed
             is_completed = current_pages >= total_pages
             if is_completed:
                 cur.execute(
                     """
-                    UPDATE user_books SET status = 'completed' WHERE user_id = ? AND book_id = ?
+                    UPDATE user_books SET status = 'completed' WHERE user_id = %s AND book_id = %s
                     """,
                     (user_id, book_id),
                 )
@@ -313,7 +321,7 @@ class BookService:
             cur.execute(
                 """
                 INSERT INTO reading_sessions (user_id, book_id, league_id, session_date, pages_read)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 (user_id, book_id, league_id, date.today(), pages_read),
             )
@@ -333,15 +341,15 @@ class BookService:
     def get_user_stats(self, user_id: int) -> Dict:
         with db_manager.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM user_books WHERE user_id = ?", (user_id,))
-            total_books = int(cur.fetchone()[0] or 0)
+            cur.execute("SELECT COUNT(*) as count FROM user_books WHERE user_id = %s", (user_id,))
+            total_books = int(cur.fetchone()['count'] or 0)
             cur.execute(
-                "SELECT COUNT(*) FROM user_books WHERE user_id = ? AND status = 'completed'",
+                "SELECT COUNT(*) as count FROM user_books WHERE user_id = %s AND status = 'completed'",
                 (user_id,),
             )
-            completed_books = int(cur.fetchone()[0] or 0)
-            cur.execute("SELECT SUM(pages_read) FROM user_books WHERE user_id = ?", (user_id,))
-            total_pages = int(cur.fetchone()[0] or 0)
+            completed_books = int(cur.fetchone()['count'] or 0)
+            cur.execute("SELECT SUM(pages_read) as sum FROM user_books WHERE user_id = %s", (user_id,))
+            total_pages = int(cur.fetchone()['sum'] or 0)
             return {
                 "total_books": total_books,
                 "completed_books": completed_books,
