@@ -171,6 +171,14 @@ class LeagueService:
         except Exception as e:
             self.logger.error(f"Failed to get user leagues: {e}")
             return []
+
+    def get_league_by_id(self, league_id: int) -> Optional[League]:
+        """Get league by ID."""
+        try:
+            return self.league_repo.get_league_by_id(league_id)
+        except Exception as e:
+            self.logger.error(f"Failed to get league by ID: {e}")
+            return None
     
     def get_league_info(self, league_id: int, user_id: int) -> Optional[Dict]:
         """Get detailed information about a league."""

@@ -42,7 +42,7 @@ class BookService:
                 """
                 SELECT book_id, title, author, total_pages
                 FROM books WHERE is_featured = TRUE
-                ORDER BY book_id
+                ORDER BY book_id DESC
                 """
             )
             rows = cur.fetchall()

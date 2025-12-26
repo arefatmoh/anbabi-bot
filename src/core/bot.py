@@ -109,12 +109,8 @@ class ReadingTrackerBot:
     async def _show_community_menu_with_global_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show community menu with global keyboard."""
         try:
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse"), InlineKeyboardButton("👥 My Leagues", callback_data="com_my")],
-                [InlineKeyboardButton("📖 Update Progress", callback_data="com_progress"), InlineKeyboardButton("🏆 Leaderboard", callback_data="com_leaderboard")],
-                [InlineKeyboardButton("⏰ Reminders", callback_data="com_reminder"), InlineKeyboardButton("📊 My Stats", callback_data="com_stats")],
-                [InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
-            ])
+            from src.core.keyboards.league_keyboards import get_league_main_menu_keyboard
+            keyboard = get_league_main_menu_keyboard()
             await update.message.reply_text("👥 <b>Community Mode</b> — choose an option:", reply_markup=keyboard, parse_mode='HTML')
         except Exception as e:
             self.logger.error(f"Failed to show community menu: {e}")
@@ -199,6 +195,7 @@ class ReadingTrackerBot:
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^ind_(books_menu|my_books|featured_books|add_book|progress|stats|reminder|set_goal)$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_individual_action, pattern="^featured_books_page_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_action, pattern="^com_(browse|my|progress|leaderboard|reminder|stats)$"))
+            self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_help, pattern="^com_help$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_progress_league, pattern="^com_progress_league_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(self.user_handlers.handle_community_reminder_league, pattern="^com_reminder_league_\\d+$"))
 
@@ -249,6 +246,7 @@ class ReadingTrackerBot:
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_browse, pattern="^league_browse$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_my_leagues, pattern="^league_my_leagues$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_view, pattern="^league_view_\\d+$"))
+            self.application.add_handler(CallbackQueryHandler(lh.handle_league_members_view, pattern="^league_members_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_join, pattern="^league_join_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_join_confirm, pattern="^league_join_confirm_\\d+$"))
             self.application.add_handler(CallbackQueryHandler(lh.handle_league_leave, pattern="^league_leave_\\d+$"))

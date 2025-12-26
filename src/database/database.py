@@ -95,14 +95,20 @@ class DatabaseManager:
         try:
             if self.db_type == 'postgres':
                 # PostgreSQL Connection
-                conn = psycopg2.connect(
-                    host=DB_HOST,
-                    database=DB_NAME,
-                    user=DB_USER,
-                    password=DB_PASSWORD,
-                    port=DB_PORT,
-                    cursor_factory=RealDictCursor
-                )
+                if os.getenv('DATABASE_URL'):
+                    conn = psycopg2.connect(
+                        os.getenv('DATABASE_URL'),
+                        cursor_factory=RealDictCursor
+                    )
+                else:
+                    conn = psycopg2.connect(
+                        host=DB_HOST,
+                        database=DB_NAME,
+                        user=DB_USER,
+                        password=DB_PASSWORD,
+                        port=DB_PORT,
+                        cursor_factory=RealDictCursor
+                    )
                 yield conn
             else:
                 # SQLite Connection

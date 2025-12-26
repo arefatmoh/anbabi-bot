@@ -91,6 +91,13 @@ class UserHandlers:
             await admin_handlers.handle_book_addition(update, context)
             return
         
+        # Handle admin message flow
+        if context.user_data.get('message_target_user') or context.user_data.get('sending_broadcast'):
+            from src.core.handlers.admin_handlers import AdminHandlers
+            admin_handlers = AdminHandlers()
+            await admin_handlers.handle_user_message(update, context)
+            return
+        
         # Handle league creation flow
         if context.user_data.get('creating_league'):
             await self._handle_league_creation_text(update, context)
@@ -382,13 +389,9 @@ class UserHandlers:
             await query.edit_message_text("❌ Error loading featured books. Please try again.")
     
     async def _show_community_menu(self, query):
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔎 Browse Leagues", callback_data="com_browse"), InlineKeyboardButton("👥 My Leagues", callback_data="com_my")],
-            [InlineKeyboardButton("📖 Update Progress", callback_data="com_progress"), InlineKeyboardButton("🏆 Leaderboard", callback_data="com_leaderboard")],
-            [InlineKeyboardButton("⏰ Reminders", callback_data="com_reminder"), InlineKeyboardButton("📊 My Stats", callback_data="com_stats")],
-            [InlineKeyboardButton("🏆 Achievements", callback_data="achievement_menu")],
-        ])
-        await query.edit_message_text("Community Mode — choose an option:", reply_markup=keyboard)
+        from src.core.keyboards.league_keyboards import get_league_main_menu_keyboard
+        keyboard = get_league_main_menu_keyboard()
+        await query.edit_message_text("👥 <b>Community Mode</b> — choose an option:", reply_markup=keyboard, parse_mode='HTML')
     
     async def handle_individual_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
@@ -580,34 +583,26 @@ class UserHandlers:
             context.user_data['current_league_id'] = league_id
             context.user_data['community_mode'] = True  # Ensure community mode is set
             
-            message = f"📖 <b>Progress Update: {league.name}</b>\n\n"
-            message += f"📚 <b>Book:</b> {book['title']}\n"
-            message += f"👤 <b>Author:</b> {book['author']}\n"
-            message += f"📊 <b>Current Progress:</b> {book['pages_read']}/{book['total_pages']} pages ({progress_percent:.1f}%)\n"
-            message += f"🎯 <b>Daily Goal:</b> {league.daily_goal} pages\n\n"
-            message += "How many pages did you read today?"
-            
-            # Create progress update keyboard
+            # Create keyboard to match Individual Mode (bot.py _handle_progress_select_book)
+            # Use progress_confirm_step instead of submit for consistency
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton(f"+{league.daily_goal}", callback_data=f"progress_add_{league.daily_goal}"),
-                    InlineKeyboardButton("+5", callback_data="progress_add_5"),
-                    InlineKeyboardButton("+10", callback_data="progress_add_10")
+                    InlineKeyboardButton(f"➕ +{league.daily_goal}", callback_data=f"progress_add_{league.daily_goal}"),
+                    InlineKeyboardButton("➕ +5", callback_data="progress_add_5"),
+                    InlineKeyboardButton("➕ +10", callback_data="progress_add_10")
                 ],
                 [
-                    InlineKeyboardButton("[-]", callback_data="progress_add_-1"),
-                    InlineKeyboardButton(f"[{league.daily_goal}]", callback_data="progress_counter"),
-                    InlineKeyboardButton("[+]", callback_data="progress_add_1")
+                    InlineKeyboardButton("➖", callback_data="progress_add_-1"),
+                    InlineKeyboardButton(f"{league.daily_goal}", callback_data="noop"),
+                    InlineKeyboardButton("➕", callback_data="progress_add_1")
                 ],
                 [
-                    InlineKeyboardButton("Submit", callback_data="progress_submit")
-                ],
-                [
+                    InlineKeyboardButton("✅ Update Progress", callback_data="progress_confirm_step"),
                     InlineKeyboardButton("⬅️ Back to Community", callback_data="mode_community")
                 ]
             ])
             
-            await query.edit_message_text(message, reply_markup=keyboard)
+            await query.edit_message_text("Choose quick add, adjust counter, or enter pages (number):", reply_markup=keyboard)
             
         except Exception as e:
             self.logger.error(f"Error handling community progress league: {e}")
@@ -882,6 +877,33 @@ class UserHandlers:
             self.logger.error(f"Error handling community stats: {e}")
             await query.edit_message_text("❌ Error loading community statistics.")
     
+    async def handle_community_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle community help & rules display."""
+        query = update.callback_query
+        await query.answer()
+        
+        help_text = (
+            "👥 <b>Community Mode Help & Rules</b>\n\n"
+            "<b>How it works:</b>\n"
+            "1. Join a league to start competing with others.\n"
+            "2. Read your book and update your progress daily.\n"
+            "3. Earn points and climb the leaderboard!\n\n"
+            "<b>Rules:</b>\n"
+            "• Be honest about your reading progress.\n"
+            "• Respect other members in the league.\n"
+            "• Have fun and stay motivated!\n\n"
+            "<b>Commands:</b>\n"
+            "/league - Open Community Hub\n"
+            "/leaderboard - View current standings"
+        )
+        
+        from src.core.keyboards.league_keyboards import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Community Hub", callback_data="mode_community")]
+        ])
+        
+        await query.edit_message_text(help_text, reply_markup=keyboard, parse_mode='HTML')
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         from src.core.bot import GLOBAL_MODE_KEYBOARD
         await update.message.reply_text(HELP_MESSAGE, reply_markup=GLOBAL_MODE_KEYBOARD)

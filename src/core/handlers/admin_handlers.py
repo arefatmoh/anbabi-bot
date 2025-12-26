@@ -91,17 +91,45 @@ class AdminHandlers:
         elif action.startswith("books_page_"):
             page = int(action.split("_")[-1])
             await self._show_all_books(query, page)
-        elif action.startswith("message_page_"):
-            page = int(action.split("_")[-1])
-            await self._show_users_for_message(query, page)
-        elif action.startswith("message_user_"):
-            user_id = int(action.split("_")[-1])
-            context.user_data['message_target_user'] = user_id
-            await query.edit_message_text(
-                f"📧 <b>Send Message</b>\n\n"
-                f"Sending to User ID: {user_id}\n\n"
-                "Type your message:"
-            )
+        elif action.startswith("message_"):
+            if action.startswith("message_page_"):
+                page = int(action.split("_")[-1])
+                await self._show_users_for_message(query, page)
+            elif action.startswith("message_user_"):
+                user_id = int(action.split("_")[-1])
+                context.user_data['message_target_user'] = user_id
+                # Ensure broadcast mode is off
+                context.user_data.pop('sending_broadcast', None)
+                await query.edit_message_text(
+                    f"📧 <b>Send Message</b>\n\n"
+                    f"Sending to User ID: {user_id}\n\n"
+                    "Type your message:"
+                )
+            elif action == "message_select":
+                await self._show_users_for_message(query)
+            elif action == "message_all":
+                context.user_data['sending_broadcast'] = True
+                # Ensure specific target is off
+                context.user_data.pop('message_target_user', None)
+                
+                # Get user count for context
+                total = 0
+                try:
+                    with db_manager.get_connection() as conn:
+                        cur = conn.cursor()
+                        cur.execute("SELECT COUNT(*) as count FROM users")
+                        total = cur.fetchone()['count']
+                except:
+                    pass
+                
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_user_message")]])
+                await query.edit_message_text(
+                    f"📢 <b>Broadcast Message</b>\n\n"
+                    f"You are about to send a message to <b>{total} users</b>.\n\n"
+                    "Type your message below (or /cancel to abort):",
+                    reply_markup=keyboard,
+                    parse_mode='HTML'
+                )
         elif action == "back":
             await self._show_admin_dashboard(query)
     
@@ -469,16 +497,70 @@ class AdminHandlers:
         
         try:
             text = update.message.text.strip()
-            if ':' not in text:
-                await update.message.reply_text("❌ Format: UserID: Message\nExample: 123456789: Hello!")
+            
+            # Check context for target user (from UI selection)
+            target_user_id = context.user_data.get('message_target_user')
+            is_broadcast = context.user_data.get('sending_broadcast')
+            
+            if is_broadcast:
+                # Handle broadcast
+                message = text
+                # Clear context
+                context.user_data.pop('sending_broadcast', None)
+                
+                await update.message.reply_text("⏳ Sending broadcast message...")
+                
+                # Get all user IDs
+                user_ids = []
+                try:
+                    with db_manager.get_connection() as conn:
+                        cur = conn.cursor()
+                        cur.execute("SELECT user_id FROM users")
+                        rows = cur.fetchall()
+                        user_ids = [r['user_id'] for r in rows]
+                except Exception as e:
+                    self.logger.error(f"Error fetching users for broadcast: {e}")
+                    await update.message.reply_text("❌ Error fetching user list.")
+                    return
+                
+                success_count = 0
+                fail_count = 0
+                
+                for uid in user_ids:
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=message)
+                        success_count += 1
+                    except Exception:
+                        fail_count += 1
+                
+                await update.message.reply_text(
+                    f"✅ <b>Broadcast Complete</b>\n\n"
+                    f"Sent: {success_count}\n"
+                    f"Failed: {fail_count}\n\n"
+                    f"Message:\n{message}"
+                )
                 return
+
+            if target_user_id:
+                user_id = target_user_id
+                message = text
+                # Clear context
+                context.user_data.pop('message_target_user', None)
+            else:
+                if ':' not in text:
+                    await update.message.reply_text("❌ Format: UserID: Message\nExample: 123456789: Hello!")
+                    return
+                
+                user_id_str, message = text.split(':', 1)
+                user_id = int(user_id_str.strip())
+                message = message.strip()
             
-            user_id, message = text.split(':', 1)
-            user_id = int(user_id.strip())
-            message = message.strip()
-            
-            # Send message to user (this would need bot instance)
-            await update.message.reply_text(f"📧 Message sent to user {user_id}:\n\n{message}")
+            # Send message to user
+            try:
+                await context.bot.send_message(chat_id=user_id, text=message)
+                await update.message.reply_text(f"✅ Message sent to user {user_id}:\n\n{message}")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Failed to send to {user_id}. User might have blocked the bot.")
             
         except ValueError:
             await update.message.reply_text("❌ User ID must be a number")
@@ -604,7 +686,16 @@ class AdminHandlers:
         elif action == "user_unban":
             await query.edit_message_text("✅ <b>Unban User</b>\n\nSend user ID to unban:")
         elif action == "user_message":
-            await self._show_users_for_message(query)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👤 Specific User", callback_data="admin_message_select")],
+                [InlineKeyboardButton("📢 All Users", callback_data="admin_message_all")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="admin_users")]
+            ])
+            await query.edit_message_text(
+                "📧 <b>Send Message</b>\n\n"
+                "Choose recipient(s):",
+                reply_markup=keyboard
+            )
         elif action.startswith("message_user_"):
             user_id = int(action.split("_")[-1])
             context.user_data['message_target_user'] = user_id
@@ -775,7 +866,7 @@ class AdminHandlers:
                     text += f"   {row['city']}: {row['count']} users\n"
             
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back to Users", callback_data="admin_users")],
+                [InlineKeyboardButton("⬅️ Back to Analytics", callback_data="admin_analytics")],
             ])
             
             await query.edit_message_text(text, reply_markup=keyboard)
